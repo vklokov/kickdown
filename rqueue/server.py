@@ -1,15 +1,15 @@
 import asyncio
 import signal
-from collections.abc import Callable, Awaitable
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 
 import humanize
-from rqueue.healthcheck import Healthchecker
+
 from rqueue.config import Config
 from rqueue.consumer import Consumer
+from rqueue.healthcheck import Healthchecker
+from rqueue.schemas import Performable, Status
 from rqueue.store import Store, StoreError
-from rqueue.schemas import Status, Performable
 
 Hook = Callable[[], Awaitable[None]]
 
@@ -20,8 +20,8 @@ class Server:
         self.logger = config.logger
         self._store = Store(config.redis_url, config._queue)
         self._workers: dict[str, Performable] = {}
-        self._started_at: Optional[datetime] = None
-        self._consumer: Optional[Consumer] = None
+        self._started_at: datetime | None = None
+        self._consumer: Consumer | None = None
         self._startup_hooks: list[Hook] = []
         self._shutdown_hooks: list[Hook] = []
 
@@ -62,7 +62,7 @@ class Server:
                     extra={"hook": getattr(hook, "__name__", repr(hook)), "error": str(e)},
                 )
 
-        self._started_at = datetime.now(timezone.utc)
+        self._started_at = datetime.now(UTC)
 
         checker = Healthchecker(port=self.config.healthcheck_port, app=self, store=self._store)
 
@@ -120,7 +120,7 @@ class Server:
         if not self._started_at:
             return ""
 
-        seconds = int((datetime.now(timezone.utc) - self._started_at).total_seconds())
+        seconds = int((datetime.now(UTC) - self._started_at).total_seconds())
         return humanize.precisedelta(timedelta(seconds=seconds))
 
     def status(self) -> Status:

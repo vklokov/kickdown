@@ -1,10 +1,11 @@
 import asyncio
-import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from rqueue.consumer import Consumer
+import pytest
+
 from rqueue.config import Config
+from rqueue.consumer import Consumer
 from rqueue.schemas import Job
 from rqueue.store import Store, StoreError
 
@@ -44,7 +45,7 @@ def test_is_ok_returns_true_when_heartbeat_is_fresh(consumer):
 
 
 def test_is_ok_returns_false_when_heartbeat_is_stale(consumer, mock_config):
-    stale = datetime.now(timezone.utc) - timedelta(
+    stale = datetime.now(UTC) - timedelta(
         seconds=mock_config.redis_ping_timeout * 2 + 1
     )
     consumer._last_heartbeat = stale
@@ -55,7 +56,7 @@ def test_is_ok_returns_false_when_heartbeat_is_stale(consumer, mock_config):
 
 
 def test_last_ping_format(consumer):
-    consumer._last_heartbeat = datetime(2026, 5, 18, 12, 34, 56, tzinfo=timezone.utc)
+    consumer._last_heartbeat = datetime(2026, 5, 18, 12, 34, 56, tzinfo=UTC)
     assert consumer.last_ping == "2026-05-18 12:34:56 UTC"
 
 

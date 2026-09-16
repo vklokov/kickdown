@@ -1,10 +1,10 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from rqueue.schemas import Job, Performable
 from rqueue.config import Config
+from rqueue.schemas import Job, Performable
 from rqueue.store import Store, StoreError
 
 
@@ -19,7 +19,7 @@ class Consumer:
         self.config = config
         self.logger = config.logger
         self._semaphore = asyncio.Semaphore(config.concurrency)
-        self._last_heartbeat = datetime.now(timezone.utc)
+        self._last_heartbeat = datetime.now(UTC)
         self._workers = workers
         self._retry_tasks: set[asyncio.Task] = set()
 
@@ -88,9 +88,9 @@ class Consumer:
         Executor wrapper aimed to track job processing like duration and metrics
         """
         self.logger.info(f"[RqueueServer] jid={job.jid} started")
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
         yield
-        duration = (datetime.now(timezone.utc) - started_at).total_seconds()
+        duration = (datetime.now(UTC) - started_at).total_seconds()
         self.logger.info(
             f"[RqueueServer] jid={job.jid} done", extra={"duration": duration}
         )
@@ -102,7 +102,7 @@ class Consumer:
 
     @property
     def is_ok(self) -> bool:
-        elapsed = (datetime.now(timezone.utc) - self._last_heartbeat).total_seconds()
+        elapsed = (datetime.now(UTC) - self._last_heartbeat).total_seconds()
         return elapsed < self.config.redis_ping_timeout * 2
 
     @property
@@ -112,7 +112,7 @@ class Consumer:
     async def _ping(self):
         try:
             await self._store.ping_async()
-            self._last_heartbeat = datetime.now(timezone.utc)
+            self._last_heartbeat = datetime.now(UTC)
         except StoreError as e:
             self.logger.error(
                 "[RQueueServer] redis ping failed", extra={"error": str(e)}

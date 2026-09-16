@@ -1,8 +1,6 @@
-from typing import Optional
 
-from rqueue.schemas import Loggable
 from rqueue.logger import Logger
-
+from rqueue.schemas import Loggable
 
 _default_concurrency = 1
 _default_queue = "default"
@@ -19,12 +17,12 @@ class Config:
     def __init__(
         self,
         redis_url: str,
-        queue: Optional[str] = None,
-        concurrency: Optional[int] = None,
-        redis_ping_timeout: Optional[int] = None,
-        redis_reconnect_delay: Optional[int] = None,
-        logger: Optional[Loggable] = None,
-        healthcheck_port: Optional[int] = None,
+        queue: str | None = None,
+        concurrency: int | None = None,
+        redis_ping_timeout: int | None = None,
+        redis_reconnect_delay: int | None = None,
+        logger: Loggable | None = None,
+        healthcheck_port: int | None = None,
     ):
         self.redis_url = redis_url
         self._queue = queue or _default_queue

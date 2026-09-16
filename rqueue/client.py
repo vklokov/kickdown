@@ -1,14 +1,13 @@
-from typing import Optional
 
 from uuid_extensions import uuid7str
 
-from rqueue.schemas import Job, Stats, Performable
 from rqueue.config import _default_queue
+from rqueue.schemas import Job, Performable, Stats
 from rqueue.store import Store
 
 
 class Client:
-    def __init__(self, redis_url: str, queue: Optional[str] = None):
+    def __init__(self, redis_url: str, queue: str | None = None):
         self._store = Store(redis_url, queue or _default_queue)
 
     def enqueue(

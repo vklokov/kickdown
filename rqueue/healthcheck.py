@@ -1,6 +1,7 @@
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+
 from rqueue.schemas import Observable
 from rqueue.store import Store, StoreError
 

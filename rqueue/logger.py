@@ -1,6 +1,5 @@
-import sys
 import logging
-from typing import Optional
+import sys
 
 
 class Logger:
@@ -14,14 +13,14 @@ class Logger:
             self.logger.addHandler(handler)
         self.logger.setLevel(logging.INFO)
 
-    def info(self, msg: str, extra: Optional[dict] = None):
+    def info(self, msg: str, extra: dict | None = None):
         self.logger.info(msg, extra=extra or {})
 
-    def error(self, msg: str, extra: Optional[dict] = None):
+    def error(self, msg: str, extra: dict | None = None):
         self.logger.error(msg, extra=extra or {})
 
-    def debug(self, msg: str, extra: Optional[dict] = None):
+    def debug(self, msg: str, extra: dict | None = None):
         self.logger.debug(msg, extra=extra or {})
 
-    def warning(self, msg: str, extra: Optional[dict] = None):
+    def warning(self, msg: str, extra: dict | None = None):
         self.logger.warning(msg, extra=extra or {})
