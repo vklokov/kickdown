@@ -1,4 +1,5 @@
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -32,9 +33,12 @@ def mock_store():
     return MagicMock(spec=Store)
 
 
-@pytest.fixture(autouse=True)
-def no_retry_delay(monkeypatch):
-    monkeypatch.setattr(consumer_module, "_retry_delay", 0)
+def scheduled_task(mock_store) -> Task:
+    return mock_store.schedule.call_args[0][0]
+
+
+def scheduled_at(mock_store) -> float:
+    return mock_store.schedule.call_args[0][1]
 
 
 # --- queue discovery / round robin ---
@@ -140,9 +144,10 @@ async def test_run_task_retries_on_worker_failure(mock_store):
     task = make_task(operation="send", retry_count=2)
     await consumer._run_task(task)
 
-    pushed = mock_store.push.call_args[0][0]
-    assert pushed.retry_count == 1
-    assert pushed.jid == task.jid
+    retried = scheduled_task(mock_store)
+    assert retried.retry_count == 1
+    assert retried.jid == task.jid
+    mock_store.push.assert_not_called()
 
 
 async def test_run_task_increments_attempt_on_retry(mock_store):
@@ -152,8 +157,7 @@ async def test_run_task_increments_attempt_on_retry(mock_store):
 
     await consumer._run_task(make_task(operation="send", retry_count=2, attempt=1))
 
-    pushed = mock_store.push.call_args[0][0]
-    assert pushed.attempt == 2
+    assert scheduled_task(mock_store).attempt == 2
 
 
 async def test_retry_delay_grows_with_backoff_coefficient(mock_store, monkeypatch):
@@ -165,16 +169,12 @@ async def test_retry_delay_grows_with_backoff_coefficient(mock_store, monkeypatc
     monkeypatch.setattr(consumer_module, "_backoff_coefficient", 2.0)
 
     delays = []
-
-    async def fake_sleep(seconds):
-        delays.append(seconds)
-
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-
     for attempt in range(3):
+        now = time.time()
         await consumer._run_task(
             make_task(operation="send", retry_count=3, attempt=attempt)
         )
+        delays.append(round(scheduled_at(mock_store) - now))
 
     assert delays == [1, 2, 4]
 
@@ -198,7 +198,7 @@ async def test_run_task_drops_task_when_retries_exhausted(mock_store):
     task = make_task(operation="send", retry_count=0)
     await consumer._run_task(task)
 
-    mock_store.push.assert_not_called()
+    mock_store.schedule.assert_not_called()
 
 
 async def test_run_task_increments_failed_when_retries_exhausted(mock_store):
@@ -223,10 +223,10 @@ async def test_run_task_logs_but_does_not_raise_when_stats_update_fails(mock_sto
     consumer.logger.error.assert_called_with("failed to update stats", extra={"error": "connection lost"})
 
 
-async def test_run_task_swallows_store_error_on_retry_push(mock_store):
+async def test_run_task_swallows_store_error_on_retry_schedule(mock_store):
     worker = make_worker("emails", "send")
     worker.perform.side_effect = RuntimeError("boom")
-    mock_store.push.side_effect = StoreError("connection lost")
+    mock_store.schedule.side_effect = StoreError("connection lost")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
     task = make_task(operation="send", retry_count=1)
@@ -253,22 +253,15 @@ async def test_run_task_releases_semaphore_on_failure(mock_store):
     assert not consumer._semaphore.locked()
 
 
-async def test_run_task_releases_semaphore_before_retry_delay(mock_store, monkeypatch):
+async def test_run_task_releases_semaphore_on_retry(mock_store):
     worker = make_worker("emails", "send")
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker), concurrency=1)
 
-    locked_during_sleep = []
-
-    async def fake_sleep(_seconds):
-        locked_during_sleep.append(consumer._semaphore.locked())
-
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
-
     await consumer._semaphore.acquire()
     await consumer._run_task(make_task(operation="send", retry_count=1))
 
-    assert locked_during_sleep == [False]
+    assert not consumer._semaphore.locked()
 
 
 # --- drain ---

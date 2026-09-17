@@ -21,6 +21,9 @@ class Client:
     async def pending(self, queue: str) -> list[Task]:
         return await asyncio.to_thread(self._store.pending, queue)
 
+    async def scheduled(self) -> list[Task]:
+        return await asyncio.to_thread(self._store.scheduled)
+
     async def stats(self, queue: str) -> Stats:
         return await asyncio.to_thread(self._store.stats, queue)
 

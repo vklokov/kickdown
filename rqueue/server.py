@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from .consumer import Consumer
 from .log import default_logger
 from .models import Performable, Task
+from .scheduler import Scheduler
 from .store import Store, StoreError
 from .web import Web
 
@@ -75,6 +76,7 @@ class Server:
             concurrency=self._concurrency,
             logger=self.logger,
         )
+        scheduler = Scheduler(store=self._store, logger=self.logger)
         web = Web(
             port=self._web_port,
             server=self,
@@ -94,15 +96,17 @@ class Server:
         )
 
         consume_task = asyncio.create_task(consumer.consume(), name="consumer")
+        schedule_task = asyncio.create_task(scheduler.run(), name="scheduler")
         web_task = asyncio.create_task(web.run(), name="web")
         stop_task = asyncio.create_task(stop_event.wait(), name="stop")
 
         try:
             await asyncio.wait(
-                [consume_task, web_task, stop_task], return_when=asyncio.FIRST_COMPLETED
+                [consume_task, schedule_task, web_task, stop_task],
+                return_when=asyncio.FIRST_COMPLETED,
             )
 
-            for task in (consume_task, web_task):
+            for task in (consume_task, schedule_task, web_task):
                 if task.done() and not task.cancelled():
                     exc = task.exception()
                     if exc is not None:
@@ -113,10 +117,11 @@ class Server:
         finally:
             self.logger.info("server shutting down")
             consume_task.cancel()
+            schedule_task.cancel()
             web_task.cancel()
             stop_task.cancel()
             await asyncio.gather(
-                consume_task, web_task, stop_task, return_exceptions=True
+                consume_task, schedule_task, web_task, stop_task, return_exceptions=True
             )
             await consumer.drain()
 

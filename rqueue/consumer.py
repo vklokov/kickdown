@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections import deque
 from collections.abc import Mapping
 
@@ -114,13 +115,14 @@ class Consumer:
                     "attempt": task.attempt + 1,
                 }
             )
-            await asyncio.sleep(delay)
             try:
-                await asyncio.to_thread(self._store.push, retry_task)
-            except StoreError as push_err:
+                await asyncio.to_thread(
+                    self._store.schedule, retry_task, time.time() + delay
+                )
+            except StoreError as schedule_err:
                 self.logger.error(
-                    f"jid={task.jid} failed to requeue for retry",
-                    extra={"error": str(push_err)},
+                    f"jid={task.jid} failed to schedule retry",
+                    extra={"error": str(schedule_err)},
                 )
         else:
             self.logger.error(

@@ -125,6 +125,24 @@ async def test_run_executes_startup_and_shutdown_hooks_and_closes_store(server, 
     MockWeb.assert_called_once_with(port=3030, server=server, admin_username=None, admin_password=None)
 
 
+async def test_run_starts_the_scheduler(server, mock_store):
+    server.add_workers(make_worker("q1", "a"))
+
+    with (
+        patch("rqueue.server.Consumer") as MockConsumer,
+        patch("rqueue.server.Web") as MockWeb,
+        patch("rqueue.server.Scheduler") as MockScheduler,
+    ):
+        MockConsumer.return_value.consume = AsyncMock(return_value=None)
+        MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockWeb.return_value.run = AsyncMock(return_value=None)
+        MockScheduler.return_value.run = AsyncMock(return_value=None)
+        await server.run()
+
+    MockScheduler.assert_called_once_with(store=mock_store, logger=server.logger)
+    MockScheduler.return_value.run.assert_awaited_once()
+
+
 async def test_web_port_is_configurable(mock_store):
     with patch("rqueue.server.Store", return_value=mock_store):
         server = Server("redis://localhost:6379", web_port=9000)

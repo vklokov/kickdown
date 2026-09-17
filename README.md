@@ -98,8 +98,20 @@ coefficient are fixed in the library and cannot be configured per task:
 | 2nd   | 1.5s  |
 | 3rd   | 2.3s  |
 
-The concurrency slot is released before the delay, so a failing task never
-stalls the rest of the consumer.
+A retried task is not held in memory while it waits: it goes into a scheduled
+sorted set in Redis (`rqueue:scheduled`, scored by its due timestamp), and a
+scheduler loop running inside every server moves due tasks back into their
+queue. So a retry survives a process restart, and the concurrency slot is
+freed immediately instead of being blocked for the whole delay.
+
+```python
+# Tasks waiting for their retry delay to elapse, across all queues
+tasks = await client.scheduled()
+```
+
+Note that a task is still lost if the process dies *while its worker is
+running* — closing that window is the next step (an in-flight list per
+consumer plus a reaper).
 
 Queue names are raw identifiers (e.g. `"default"`, `"emails"`). The client
 constructs the full Redis key internally as `rqueue:queue:{name}`.

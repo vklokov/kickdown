@@ -10,7 +10,8 @@
 - `Client.enqueue` now takes a single `Task` (carrying `queue`, `operation`, `params`, `jid`, `retry_count`) instead of a worker class and payload dict
 - `Client` is now fully async (`enqueue`, `pending`, `close`), and supports `async with` instead of a sync context manager
 - `Server` no longer takes a `Config` object; it's constructed directly with `redis_url` and `concurrency`
-- Retries use a hardcoded exponential backoff (`1s * 1.5 ** attempt`) instead of a per-task `backoff_coefficient` — a failed task is retried with `retry_count` decremented and `attempt` incremented until `retry_count` reaches `0`; the concurrency slot is released before the delay, so one failing task no longer stalls the whole consumer
+- Retries use a hardcoded exponential backoff (`1s * 1.5 ** attempt`) instead of a per-task `backoff_coefficient` — a failed task is retried with `retry_count` decremented and `attempt` incremented until `retry_count` reaches `0`
+- Retries are no longer awaited in memory: the failed task is stored in a scheduled sorted set in Redis and picked up when due, so it survives a process restart and does not hold a concurrency slot for the duration of the delay
 - On shutdown, the server now waits for in-flight tasks (including ones mid-retry) to finish before closing the Redis connection
 
 ### Added
@@ -21,6 +22,7 @@
 - `Client.stats(queue)` returns per-queue `processed`/`failed` counters (`Stats` model); the consumer increments them on task completion, permanent failure (retries exhausted), and unrecognized operations
 - `GET /admin` renders an HTML dashboard: total processed/failed counters, and a per-queue table of current pending task counts; optionally gated behind HTTP Basic Auth via `Server(admin_username=..., admin_password=...)` (no auth if either is left unset)
 - `Server.enqueue(task)` pushes a task using the server's own Redis connection, so workers/hooks can schedule tasks without a separate `Client`
+- A `Scheduler` loop runs inside every `Server`, moving due tasks from `rqueue:scheduled` back into their queues (atomically, via a Lua script); `Client.scheduled()` lists the tasks currently waiting there
 
 ### Removed
 - The old `Loggable` protocol and the custom `Logger` wrapper class (replaced by the stdlib logger above)
