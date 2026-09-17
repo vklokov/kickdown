@@ -220,7 +220,9 @@ async def test_run_task_logs_but_does_not_raise_when_stats_update_fails(mock_sto
 
     await consumer._run_task(make_task(operation="send"))  # must not raise
 
-    consumer.logger.error.assert_called_with("failed to update stats", extra={"error": "connection lost"})
+    consumer.logger.error.assert_called_with(
+        "failed to update stats", extra={"error": "connection lost"}
+    )
 
 
 async def test_run_task_swallows_store_error_on_retry_schedule(mock_store):

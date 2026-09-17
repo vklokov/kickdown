@@ -55,24 +55,44 @@ def test_authorized_when_no_credentials_configured(web):
 
 
 def test_authorized_rejects_missing_credentials_when_configured(mock_store):
-    web = Web(port=3030, server=make_server(mock_store, []), admin_username="a", admin_password="b")
+    web = Web(
+        port=3030,
+        server=make_server(mock_store, []),
+        admin_username="a",
+        admin_password="b",
+    )
     assert web._authorized(None) is False
 
 
 def test_authorized_rejects_wrong_password(mock_store):
-    web = Web(port=3030, server=make_server(mock_store, []), admin_username="a", admin_password="b")
+    web = Web(
+        port=3030,
+        server=make_server(mock_store, []),
+        admin_username="a",
+        admin_password="b",
+    )
     creds = HTTPBasicCredentials(username="a", password="wrong")
     assert web._authorized(creds) is False
 
 
 def test_authorized_accepts_correct_credentials(mock_store):
-    web = Web(port=3030, server=make_server(mock_store, []), admin_username="a", admin_password="b")
+    web = Web(
+        port=3030,
+        server=make_server(mock_store, []),
+        admin_username="a",
+        admin_password="b",
+    )
     creds = HTTPBasicCredentials(username="a", password="b")
     assert web._authorized(creds) is True
 
 
 async def test_admin_raises_401_when_unauthorized(mock_store):
-    web = Web(port=3030, server=make_server(mock_store, []), admin_username="a", admin_password="b")
+    web = Web(
+        port=3030,
+        server=make_server(mock_store, []),
+        admin_username="a",
+        admin_password="b",
+    )
     with pytest.raises(HTTPException) as exc_info:
         await web._admin(credentials=None)
     assert exc_info.value.status_code == 401
@@ -88,7 +108,9 @@ async def test_admin_returns_html_when_no_auth_configured(web):
 
 
 async def test_render_admin_includes_queue_pending_counts(mock_store):
-    mock_store.queue_length.side_effect = lambda queue: {"default": 156, "reports": 3}[queue]
+    mock_store.queue_length.side_effect = lambda queue: {"default": 156, "reports": 3}[
+        queue
+    ]
     web = Web(port=3030, server=make_server(mock_store, ["default", "reports"]))
 
     html = await web._render_admin()
@@ -98,7 +120,10 @@ async def test_render_admin_includes_queue_pending_counts(mock_store):
 
 
 async def test_render_admin_includes_totals_from_stats(mock_store):
-    mock_store.stats.side_effect = [Stats(processed=3, failed=1), Stats(processed=5, failed=0)]
+    mock_store.stats.side_effect = [
+        Stats(processed=3, failed=1),
+        Stats(processed=5, failed=0),
+    ]
     web = Web(port=3030, server=make_server(mock_store, ["emails", "reports"]))
 
     html = await web._render_admin()

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - 2026-09-17
+## 0.4.0a1 - 2026-09-17
 
 ### Changed
 - Rewritten around an arbitrary number of queues instead of a single configured queue

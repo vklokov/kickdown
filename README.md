@@ -2,6 +2,9 @@
 
 A Redis-backed background job queue for Python.
 
+Requires Python 3.13+ and **Redis 6.2 or newer** (the queue relies on `LMOVE`
+and on server-side Lua scripts introduced in that release).
+
 ## Usage
 
 ### Defining a worker
@@ -159,9 +162,11 @@ initialising shared resources like database pools.
 ```python
 server = Server(redis_url=...)
 
+
 @server.on_startup
 async def init_db():
     app.db = await asyncpg.create_pool(DATABASE_URL)
+
 
 @server.on_shutdown
 async def close_db():
