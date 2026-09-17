@@ -1,7 +1,8 @@
 import asyncio
 
 from .log import default_logger
-from .models import Stats, Task
+from .models import Task
+from .queue import Queue
 from .store import Store
 
 
@@ -10,22 +11,16 @@ class Client:
         self._store = Store(redis_url)
         self.logger = default_logger()
 
+    def queue(self, name: str) -> Queue:
+        return Queue(name, self._store)
+
     async def enqueue(self, task: Task) -> str:
-        await asyncio.to_thread(self._store.push, task)
+        await self.queue(task.queue).push(task)
         self.logger.info(
             f"jid={task.jid} accepted",
             extra={"queue": task.queue, "operation": task.operation},
         )
         return task.jid
-
-    async def pending(self, queue: str) -> list[Task]:
-        return await asyncio.to_thread(self._store.pending, queue)
-
-    async def scheduled(self) -> list[Task]:
-        return await asyncio.to_thread(self._store.scheduled)
-
-    async def stats(self, queue: str) -> Stats:
-        return await asyncio.to_thread(self._store.stats, queue)
 
     async def close(self):
         await asyncio.to_thread(self._store.close)

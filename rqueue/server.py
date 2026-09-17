@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from .consumer import Consumer
 from .log import default_logger
 from .models import Performable, Task
+from .queue import Queue
 from .scheduler import Scheduler
 from .store import Store, StoreError
 from .web import Web
@@ -36,15 +37,21 @@ class Server:
         return self._store
 
     @property
-    def queues(self) -> list[str]:
-        return sorted({worker.queue for worker in self._worker.values()})
+    def queues(self) -> list[Queue]:
+        return [
+            Queue(name, self._store)
+            for name in sorted({worker.queue for worker in self._worker.values()})
+        ]
+
+    def queue(self, name: str) -> Queue:
+        return Queue(name, self._store)
 
     def add_workers(self, *args: Performable):
         for worker in args:
             self._worker[(worker.queue, worker.operation)] = worker
 
     async def enqueue(self, task: Task) -> str:
-        await asyncio.to_thread(self._store.push, task)
+        await self.queue(task.queue).push(task)
         self.logger.info(
             f"jid={task.jid} accepted",
             extra={"queue": task.queue, "operation": task.operation},
@@ -92,7 +99,8 @@ class Server:
             loop.add_signal_handler(sig, stop_event.set)
 
         self.logger.info(
-            f"server starting (queues={self.queues}, concurrency={self._concurrency}, web_port={self._web_port})"
+            f"server starting (queues={[q.name for q in self.queues]}, "
+            f"concurrency={self._concurrency}, web_port={self._web_port})"
         )
 
         consume_task = asyncio.create_task(consumer.consume(), name="consumer")

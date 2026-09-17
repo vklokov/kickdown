@@ -46,27 +46,14 @@ async def test_enqueue_preserves_task_queue(client, mock_store):
     assert pushed.queue == "reports"
 
 
-async def test_pending_delegates_to_store_with_queue(client, mock_store):
-    await client.pending("emails")
-    mock_store.pending.assert_called_once_with("emails")
+async def test_queue_returns_handle_bound_to_the_name(client):
+    assert client.queue("emails").name == "emails"
 
 
-async def test_pending_returns_store_result(client, mock_store):
-    task = make_task()
-    mock_store.pending.return_value = [task]
-    result = await client.pending("emails")
-    assert result == [task]
-
-
-async def test_stats_delegates_to_store_with_queue(client, mock_store):
-    await client.stats("emails")
-    mock_store.stats.assert_called_once_with("emails")
-
-
-async def test_stats_returns_store_result(client, mock_store):
+async def test_queue_handle_reads_through_the_shared_store(client, mock_store):
     mock_store.stats.return_value = Stats(processed=3, failed=1)
-    result = await client.stats("emails")
-    assert result == Stats(processed=3, failed=1)
+    assert await client.queue("emails").stats() == Stats(processed=3, failed=1)
+    mock_store.stats.assert_called_once_with("emails")
 
 
 async def test_close_closes_store(client, mock_store):

@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from fastapi.security import HTTPBasicCredentials
 
 from rqueue.models import Stats
+from rqueue.queue import Queue
 from rqueue.store import Store, StoreError
 from rqueue.web import Web
 
@@ -21,7 +22,7 @@ def mock_store():
 def make_server(mock_store, queues: list[str]) -> MagicMock:
     server = MagicMock()
     server.store = mock_store
-    server.queues = queues
+    server.queues = [Queue(name, mock_store) for name in queues]
     return server
 
 

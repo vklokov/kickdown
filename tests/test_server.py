@@ -43,7 +43,7 @@ def test_add_workers_allows_same_operation_on_different_queues(server):
 
 def test_queues_returns_sorted_deduped_worker_queues(server):
     server.add_workers(make_worker("reports", "a"), make_worker("emails", "b"), make_worker("emails", "c"))
-    assert server.queues == ["emails", "reports"]
+    assert [queue.name for queue in server.queues] == ["emails", "reports"]
 
 
 def make_task(**overrides) -> Task:

@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 
+from ..queue import Queue
 from ..store import Store, StoreError
 
 _ASSETS_DIR = Path(__file__).parent / "assets"
@@ -24,7 +25,7 @@ class ServerLike(Protocol):
     def store(self) -> Store: ...
 
     @property
-    def queues(self) -> list[str]: ...
+    def queues(self) -> list[Queue]: ...
 
 
 class Web:
@@ -71,15 +72,13 @@ class Web:
 
     async def _render_admin(self) -> str:
         queues = self._server.queues
-        stats = await asyncio.gather(*(asyncio.to_thread(self._server.store.stats, queue) for queue in queues))
-        lengths = await asyncio.gather(
-            *(asyncio.to_thread(self._server.store.queue_length, queue) for queue in queues)
-        )
+        stats = await asyncio.gather(*(queue.stats() for queue in queues))
+        lengths = await asyncio.gather(*(queue.length() for queue in queues))
         scheduled = await asyncio.to_thread(self._server.store.scheduled_length)
 
         if queues:
             rows = "\n".join(
-                f"<tr><td>{escape(queue)}</td><td>{length}</td></tr>"
+                f"<tr><td>{escape(queue.name)}</td><td>{length}</td></tr>"
                 for queue, length in zip(queues, lengths, strict=True)
             )
         else:

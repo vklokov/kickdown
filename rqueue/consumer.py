@@ -2,12 +2,13 @@ import asyncio
 import logging
 import time
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 
 from pydantic import ValidationError
 
 from .log import default_logger
 from .models import Performable, Task
+from .queue import Queue
 from .store import Store, StoreError
 
 _default_pop_timeout = 5
@@ -25,9 +26,11 @@ class Consumer:
     ):
         self._store = store
         self._workers = workers
-        self._queues: deque[str] = deque(
-            sorted({worker.queue for worker in workers.values()})
-        )
+        self._queues: dict[str, Queue] = {
+            name: Queue(name, store)
+            for name in sorted({worker.queue for worker in workers.values()})
+        }
+        self._order: deque[str] = deque(self._queues)
         self._semaphore = asyncio.Semaphore(concurrency)
         self.logger = logger or default_logger()
         self._tasks: set[asyncio.Task] = set()
@@ -67,11 +70,17 @@ class Consumer:
             await asyncio.gather(*self._tasks, return_exceptions=True)
 
     def _poll_order(self) -> list[str]:
-        order = list(self._queues)
-        self._queues.rotate(-1)
+        order = list(self._order)
+        self._order.rotate(-1)
         return order
 
+    def _queue(self, name: str) -> Queue:
+        # a payload naming a queue we do not serve is malformed, but its stats
+        # should still land on the queue it claims
+        return self._queues.get(name) or Queue(name, self._store)
+
     async def _run_task(self, task: Task) -> None:
+        queue = self._queue(task.queue)
         failure: Exception | None = None
         try:
             worker = self._workers.get((task.queue, task.operation))
@@ -84,7 +93,7 @@ class Consumer:
                         "operation": task.operation,
                     },
                 )
-                await self._increment(self._store.increment_failed, task.queue)
+                await self._increment(queue.increment_failed)
                 return
 
             self.logger.info(
@@ -93,7 +102,7 @@ class Consumer:
             )
             await worker.perform(task.params)
             self.logger.info(f"jid={task.jid} done")
-            await self._increment(self._store.increment_processed, task.queue)
+            await self._increment(queue.increment_processed)
         except Exception as err:  # noqa: BLE001 - worker code is arbitrary; retry boundary must catch anything
             failure = err
         finally:
@@ -116,9 +125,7 @@ class Consumer:
                 }
             )
             try:
-                await asyncio.to_thread(
-                    self._store.schedule, retry_task, time.time() + delay
-                )
+                await queue.schedule(retry_task, time.time() + delay)
             except StoreError as schedule_err:
                 self.logger.error(
                     f"jid={task.jid} failed to schedule retry",
@@ -128,10 +135,10 @@ class Consumer:
             self.logger.error(
                 f"jid={task.jid} failed permanently", extra={"error": str(failure)}
             )
-            await self._increment(self._store.increment_failed, task.queue)
+            await self._increment(queue.increment_failed)
 
-    async def _increment(self, fn, queue: str) -> None:
+    async def _increment(self, increment: Callable[[], Awaitable[None]]) -> None:
         try:
-            await asyncio.to_thread(fn, queue)
+            await increment()
         except StoreError as err:
             self.logger.error("failed to update stats", extra={"error": str(err)})
