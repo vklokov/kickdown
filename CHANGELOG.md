@@ -20,6 +20,7 @@
 - `Server` always starts a small HTTP server (`web_port`, default `3030`) with `/live` and `/ready` for liveness/readiness probes; `/ready` checks Redis connectivity
 - `Client.stats(queue)` returns per-queue `processed`/`failed` counters (`Stats` model); the consumer increments them on task completion, permanent failure (retries exhausted), and unrecognized operations
 - `GET /admin` renders an HTML dashboard: total processed/failed counters, and a per-queue table of current pending task counts; optionally gated behind HTTP Basic Auth via `Server(admin_username=..., admin_password=...)` (no auth if either is left unset)
+- `Server.enqueue(task)` pushes a task using the server's own Redis connection, so workers/hooks can schedule tasks without a separate `Client`
 
 ### Removed
 - The old `Loggable` protocol and the custom `Logger` wrapper class (replaced by the stdlib logger above)

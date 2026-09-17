@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 
 from .consumer import Consumer
 from .log import default_logger
-from .models import Performable
+from .models import Performable, Task
 from .store import Store, StoreError
 from .web import Web
 
@@ -41,6 +41,14 @@ class Server:
     def add_workers(self, *args: Performable):
         for worker in args:
             self._worker[(worker.queue, worker.operation)] = worker
+
+    async def enqueue(self, task: Task) -> str:
+        await asyncio.to_thread(self._store.push, task)
+        self.logger.info(
+            f"jid={task.jid} accepted",
+            extra={"queue": task.queue, "operation": task.operation},
+        )
+        return task.jid
 
     def on_startup(self, fn: Hook) -> Hook:
         self._startup_hooks.append(fn)
@@ -98,13 +106,18 @@ class Server:
                 if task.done() and not task.cancelled():
                     exc = task.exception()
                     if exc is not None:
-                        self.logger.error(f"{task.get_name()} task failed unexpectedly", extra={"error": str(exc)})
+                        self.logger.error(
+                            f"{task.get_name()} task failed unexpectedly",
+                            extra={"error": str(exc)},
+                        )
         finally:
             self.logger.info("server shutting down")
             consume_task.cancel()
             web_task.cancel()
             stop_task.cancel()
-            await asyncio.gather(consume_task, web_task, stop_task, return_exceptions=True)
+            await asyncio.gather(
+                consume_task, web_task, stop_task, return_exceptions=True
+            )
             await consumer.drain()
 
             await self._run_hooks(self._shutdown_hooks, "shutdown")
@@ -118,5 +131,8 @@ class Server:
             except Exception as err:  # noqa: BLE001 - hook code is arbitrary; must not abort the server
                 self.logger.error(
                     f"{phase} hook failed",
-                    extra={"hook": getattr(hook, "__name__", repr(hook)), "error": str(err)},
+                    extra={
+                        "hook": getattr(hook, "__name__", repr(hook)),
+                        "error": str(err),
+                    },
                 )

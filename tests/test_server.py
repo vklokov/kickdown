@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from rqueue.models import Task
 from rqueue.server import Server
 from rqueue.store import Store, StoreError
 
@@ -43,6 +44,25 @@ def test_add_workers_allows_same_operation_on_different_queues(server):
 def test_queues_returns_sorted_deduped_worker_queues(server):
     server.add_workers(make_worker("reports", "a"), make_worker("emails", "b"), make_worker("emails", "c"))
     assert server.queues == ["emails", "reports"]
+
+
+def make_task(**overrides) -> Task:
+    defaults = {"queue": "emails", "operation": "send", "params": {}}
+    defaults.update(overrides)
+    return Task.model_validate(defaults)
+
+
+async def test_enqueue_pushes_task_to_store(server, mock_store):
+    task = make_task()
+    await server.enqueue(task)
+    pushed = mock_store.push.call_args[0][0]
+    assert pushed is task
+
+
+async def test_enqueue_returns_jid(server):
+    task = make_task()
+    jid = await server.enqueue(task)
+    assert jid == task.jid
 
 
 def test_on_startup_registers_and_returns_fn(server):

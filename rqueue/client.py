@@ -11,10 +11,10 @@ class Client:
         self.logger = default_logger()
 
     async def enqueue(self, task: Task) -> str:
-        "returns jid"
         await asyncio.to_thread(self._store.push, task)
         self.logger.info(
-            f"jid={task.jid} accepted", extra={"queue": task.queue, "operation": task.operation}
+            f"jid={task.jid} accepted",
+            extra={"queue": task.queue, "operation": task.operation},
         )
         return task.jid
 

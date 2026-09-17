@@ -73,6 +73,14 @@ async with Client(redis_url="redis://localhost:6379") as client:
     await client.enqueue(task)
 ```
 
+`Server` can enqueue tasks too, using the same Redis connection — handy for
+a worker that needs to schedule a follow-up task, or for enqueueing from a
+startup hook, without opening a separate `Client`:
+
+```python
+jid = await server.enqueue(task)
+```
+
 #### Retries
 
 `retry_count` (default `1`) on `Task` sets how many times a failed task is
