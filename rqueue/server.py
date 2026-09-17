@@ -1,29 +1,27 @@
 import asyncio
 import signal
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime, timedelta
 
-import humanize
-
-from rqueue.config import Config
-from rqueue.consumer import Consumer
-from rqueue.healthcheck import Healthchecker
-from rqueue.schemas import Performable, Status
-from rqueue.store import Store, StoreError
+from .consumer import Consumer
+from .log import default_logger
+from .models import Performable
+from .store import Store, StoreError
 
 Hook = Callable[[], Awaitable[None]]
 
 
 class Server:
-    def __init__(self, config: Config):
-        self.config = config
-        self.logger = config.logger
-        self._store = Store(config.redis_url, config._queue)
-        self._workers: dict[str, Performable] = {}
-        self._started_at: datetime | None = None
-        self._consumer: Consumer | None = None
+    def __init__(self, redis_url: str, concurrency: int = 1):
+        self._store = Store(redis_url)
+        self._concurrency = concurrency
         self._startup_hooks: list[Hook] = []
         self._shutdown_hooks: list[Hook] = []
+        self._worker: dict[tuple[str, str], Performable] = {}
+        self.logger = default_logger()
+
+    def add_workers(self, *args: Performable):
+        for worker in args:
+            self._worker[(worker.queue, worker.operation)] = worker
 
     def on_startup(self, fn: Hook) -> Hook:
         self._startup_hooks.append(fn)
@@ -33,112 +31,61 @@ class Server:
         self._shutdown_hooks.append(fn)
         return fn
 
-    def add_worker(self, worker: Performable):
-        self._workers[worker.__class__.__name__] = worker
-
-    async def start(self):
-        if self._workers_count == 0:
+    async def run(self):
+        if not self._worker:
             raise RuntimeError(
-                "No workers registered. Register them with add_worker() before starting the server."
+                "No workers registered. Register them with add_workers() before running the server."
             )
 
         try:
-            self._store.ping()
+            await asyncio.to_thread(self._store.ping)
         except StoreError as e:
             raise RuntimeError(f"Redis connection failed: {e}") from e
 
-        self._consumer = Consumer(
+        consumer = Consumer(
             store=self._store,
-            config=self.config,
-            workers=self._workers,
+            workers=self._worker,
+            concurrency=self._concurrency,
+            logger=self.logger,
         )
 
-        for hook in self._startup_hooks:
-            try:
-                await hook()
-            except Exception as e:
-                self.logger.error(
-                    "[RQueueServer] startup hook failed",
-                    extra={"hook": getattr(hook, "__name__", repr(hook)), "error": str(e)},
-                )
-
-        self._started_at = datetime.now(UTC)
-
-        checker = Healthchecker(port=self.config.healthcheck_port, app=self, store=self._store)
-
-        tasks: list[asyncio.Task] = [
-            asyncio.create_task(checker.run(), name="healthcheck"),
-            asyncio.create_task(self._consumer.consume(), name="consumer"),
-        ]
+        await self._run_hooks(self._startup_hooks, "startup")
 
         stop_event = asyncio.Event()
         loop = asyncio.get_running_loop()
-
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, stop_event.set)
 
-        self.logger.info(
-            "[RQueueServer] server starting...",
-            extra={
-                "queue": self.config.queue(),
-                "concurrency": self.config.concurrency,
-            },
-        )
+        queues = sorted({worker.queue for worker in self._worker.values()})
+        self.logger.info(f"server starting (queues={queues}, concurrency={self._concurrency})")
 
+        consume_task = asyncio.create_task(consumer.consume(), name="consumer")
         stop_task = asyncio.create_task(stop_event.wait(), name="stop")
-        done, pending = await asyncio.wait(
-            [*tasks, stop_task],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
 
-        for task in done:
-            if task is not stop_task and (exc := task.exception()):
-                self.logger.error(
-                    "[RQueueServer] task failed",
-                    extra={"task": task.get_name(), "error": str(exc)},
-                )
+        try:
+            await asyncio.wait([consume_task, stop_task], return_when=asyncio.FIRST_COMPLETED)
 
-        self.logger.info("[RQueueServer] shutting down")
+            if consume_task.done() and not consume_task.cancelled():
+                exc = consume_task.exception()
+                if exc is not None:
+                    self.logger.error("consumer task failed unexpectedly", extra={"error": str(exc)})
+        finally:
+            self.logger.info("server shutting down")
+            consume_task.cancel()
+            stop_task.cancel()
+            await asyncio.gather(consume_task, stop_task, return_exceptions=True)
+            await consumer.drain()
 
-        for task in pending:
-            task.cancel()
+            await self._run_hooks(self._shutdown_hooks, "shutdown")
 
-        await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.to_thread(self._store.close)
 
-        for hook in self._shutdown_hooks:
+    async def _run_hooks(self, hooks: list[Hook], phase: str) -> None:
+        for hook in hooks:
             try:
                 await hook()
-            except Exception as e:
+            except Exception as err:  # noqa: BLE001 - hook code is arbitrary; must not abort the server
                 self.logger.error(
-                    "[RQueueServer] shutdown hook failed",
-                    extra={"hook": getattr(hook, "__name__", repr(hook)), "error": str(e)},
+                    f"{phase} hook failed",
+                    extra={"hook": getattr(hook, "__name__", repr(hook)), "error": str(err)},
                 )
-
-        self._store.close()
-
-    def uptime(self) -> str:
-        if not self._started_at:
-            return ""
-
-        seconds = int((datetime.now(UTC) - self._started_at).total_seconds())
-        return humanize.precisedelta(timedelta(seconds=seconds))
-
-    def status(self) -> Status:
-        if not self._consumer:
-            return Status(
-                ok=False,
-                last_ping="",
-                concurrency=self.config.concurrency,
-                uptime="",
-            )
-
-        return Status(
-            ok=self._consumer.is_ok,
-            last_ping=self._consumer.last_ping,
-            concurrency=self.config.concurrency,
-            uptime=self.uptime(),
-        )
-
-    @property
-    def _workers_count(self) -> int:
-        return len(self._workers.keys())

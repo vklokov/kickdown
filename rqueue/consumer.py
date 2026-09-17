@@ -1,119 +1,98 @@
 import asyncio
-import json
-from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+import logging
+from collections import deque
+from collections.abc import Mapping
 
-from rqueue.config import Config
-from rqueue.schemas import Job, Performable
-from rqueue.store import Store, StoreError
+from pydantic import ValidationError
+
+from .log import default_logger
+from .models import Performable, Task
+from .store import Store, StoreError
+
+_default_pop_timeout = 5
+_retry_delay = 1
 
 
 class Consumer:
     def __init__(
         self,
         store: Store,
-        config: Config,
-        workers: dict[str, Performable],
+        workers: Mapping[tuple[str, str], Performable],
+        concurrency: int = 1,
+        logger: logging.Logger | None = None,
     ):
         self._store = store
-        self.config = config
-        self.logger = config.logger
-        self._semaphore = asyncio.Semaphore(config.concurrency)
-        self._last_heartbeat = datetime.now(UTC)
         self._workers = workers
-        self._retry_tasks: set[asyncio.Task] = set()
+        self._queues: deque[str] = deque(sorted({worker.queue for worker in workers.values()}))
+        self._semaphore = asyncio.Semaphore(concurrency)
+        self.logger = logger or default_logger()
+        self._tasks: set[asyncio.Task] = set()
 
-    async def consume(self):
+    async def consume(self) -> None:
         while True:
             await self._semaphore.acquire()
 
             try:
-                raw = await self._store.pop(timeout=self.config.redis_ping_timeout)
+                task = await asyncio.to_thread(self._store.pop, self._poll_order(), _default_pop_timeout)
             except StoreError as err:
                 self._semaphore.release()
-                self.logger.error(
-                    "[RQueueServer] redis error", extra={"error": str(err)}
-                )
-                await asyncio.sleep(self.config.redis_reconnect_delay)
+                self.logger.error("redis error while popping task", extra={"error": str(err)})
+                await asyncio.sleep(_default_pop_timeout)
+                continue
+            except ValidationError as err:
+                self._semaphore.release()
+                self.logger.error("failed to parse task payload", extra={"error": str(err)})
                 continue
 
-            await self._ping()
-
-            if raw is None:
+            if task is None:
                 self._semaphore.release()
                 continue
 
-            try:
-                payload = json.loads(raw)
-                asyncio.create_task(self._run_job(payload))
-            except json.JSONDecodeError as err:
-                self._semaphore.release()
-                self.logger.error(
-                    "[RQueueServer] failed to parse payload",
-                    extra={"payload": raw, "error": str(err)},
-                )
+            handle = asyncio.create_task(self._run_task(task))
+            self._tasks.add(handle)
+            handle.add_done_callback(self._tasks.discard)
 
-    async def _run_job(self, envelop: dict):
-        job = None
+    async def drain(self) -> None:
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    def _poll_order(self) -> list[str]:
+        order = list(self._queues)
+        self._queues.rotate(-1)
+        return order
+
+    async def _run_task(self, task: Task) -> None:
+        failure: Exception | None = None
         try:
-            job = Job.model_validate(envelop)
-            worker = self._workers.get(job.worker)
-
-            if not worker:
-                raise RuntimeError(f"worker not found: {job.worker}")
-
-            async with self._track_job(job):
-                await worker.perform(job.payload)
-
-        except Exception as err:
-            if job is not None and job.attempt < job.retry_count:
-                job = job.model_copy(update={"attempt": job.attempt + 1})
-                delay = job.backoff_coefficient**job.attempt
-                self.logger.warning(
-                    f"[RQueueServer] jid={job.jid} failed, retrying ({job.attempt}/{job.retry_count}) in {delay:.1f}s",
-                    extra={"error": str(err)},
+            worker = self._workers.get((task.queue, task.operation))
+            if worker is None:
+                self.logger.error(
+                    "no worker registered for task",
+                    extra={"jid": task.jid, "queue": task.queue, "operation": task.operation},
                 )
-                task = asyncio.create_task(self._retry_job(job, delay))
-                self._retry_tasks.add(task)
-                task.add_done_callback(self._retry_tasks.discard)
-            else:
-                self.logger.error("[RQueueServer] error", extra={"error": str(err)})
-                await self._store.increment_failed()
+                return
+
+            self.logger.info(f"jid={task.jid} started", extra={"queue": task.queue, "operation": task.operation})
+            await worker.perform(task.params)
+            self.logger.info(f"jid={task.jid} done")
+        except Exception as err:  # noqa: BLE001 - worker code is arbitrary; retry boundary must catch anything
+            failure = err
         finally:
             self._semaphore.release()
 
-    @asynccontextmanager
-    async def _track_job(self, job: Job):
-        """
-        Executor wrapper aimed to track job processing like duration and metrics
-        """
-        self.logger.info(f"[RqueueServer] jid={job.jid} started")
-        started_at = datetime.now(UTC)
-        yield
-        duration = (datetime.now(UTC) - started_at).total_seconds()
-        self.logger.info(
-            f"[RqueueServer] jid={job.jid} done", extra={"duration": duration}
-        )
-        await self._store.increment_processed()
+        if failure is None:
+            return
 
-    async def _retry_job(self, job: Job, delay: float) -> None:
-        await asyncio.sleep(delay)
-        await self._store.push_async(job)
-
-    @property
-    def is_ok(self) -> bool:
-        elapsed = (datetime.now(UTC) - self._last_heartbeat).total_seconds()
-        return elapsed < self.config.redis_ping_timeout * 2
-
-    @property
-    def last_ping(self) -> str:
-        return self._last_heartbeat.strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    async def _ping(self):
-        try:
-            await self._store.ping_async()
-            self._last_heartbeat = datetime.now(UTC)
-        except StoreError as e:
-            self.logger.error(
-                "[RQueueServer] redis ping failed", extra={"error": str(e)}
+        if task.retry_count > 0:
+            self.logger.warning(
+                f"jid={task.jid} failed, retrying ({task.retry_count} attempt(s) left)",
+                extra={"error": str(failure)},
             )
+            retry_task = task.model_copy(update={"retry_count": task.retry_count - 1})
+            await asyncio.sleep(_retry_delay)
+            try:
+                await asyncio.to_thread(self._store.push, retry_task)
+            except StoreError as push_err:
+                self.logger.error(f"jid={task.jid} failed to requeue for retry", extra={"error": str(push_err)})
+        else:
+            self.logger.error(f"jid={task.jid} failed permanently", extra={"error": str(failure)})
