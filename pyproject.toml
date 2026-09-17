@@ -1,6 +1,6 @@
 [project]
 name = "kickdown"
-version = "0.4.0a1"
+version = "0.4.0"
 description = "A Redis-backed background job queue for Python"
 readme = "README.md"
 requires-python = ">=3.13"

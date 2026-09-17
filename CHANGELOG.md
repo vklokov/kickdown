@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 - unreleased
+## 0.4.0 - 2026-09-17
 
 ### Added
 - Tasks are no longer lost when a worker process dies mid-task: claiming a task atomically moves it from its queue into an in-flight list private to that consumer (`kickdown:inflight:{consumer_id}`), and it is only removed once the task finishes
