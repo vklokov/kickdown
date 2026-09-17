@@ -23,7 +23,9 @@ class Consumer:
     ):
         self._store = store
         self._workers = workers
-        self._queues: deque[str] = deque(sorted({worker.queue for worker in workers.values()}))
+        self._queues: deque[str] = deque(
+            sorted({worker.queue for worker in workers.values()})
+        )
         self._semaphore = asyncio.Semaphore(concurrency)
         self.logger = logger or default_logger()
         self._tasks: set[asyncio.Task] = set()
@@ -33,15 +35,21 @@ class Consumer:
             await self._semaphore.acquire()
 
             try:
-                task = await asyncio.to_thread(self._store.pop, self._poll_order(), _default_pop_timeout)
+                task = await asyncio.to_thread(
+                    self._store.pop, self._poll_order(), _default_pop_timeout
+                )
             except StoreError as err:
                 self._semaphore.release()
-                self.logger.error("redis error while popping task", extra={"error": str(err)})
+                self.logger.error(
+                    "redis error while popping task", extra={"error": str(err)}
+                )
                 await asyncio.sleep(_default_pop_timeout)
                 continue
             except ValidationError as err:
                 self._semaphore.release()
-                self.logger.error("failed to parse task payload", extra={"error": str(err)})
+                self.logger.error(
+                    "failed to parse task payload", extra={"error": str(err)}
+                )
                 continue
 
             if task is None:
@@ -67,13 +75,20 @@ class Consumer:
             worker = self._workers.get((task.queue, task.operation))
             if worker is None:
                 self.logger.error(
-                    "no worker registered for task",
-                    extra={"jid": task.jid, "queue": task.queue, "operation": task.operation},
+                    f"no worker registered for task jid={task.jid}",
+                    extra={
+                        "jid": task.jid,
+                        "queue": task.queue,
+                        "operation": task.operation,
+                    },
                 )
                 await self._increment(self._store.increment_failed, task.queue)
                 return
 
-            self.logger.info(f"jid={task.jid} started", extra={"queue": task.queue, "operation": task.operation})
+            self.logger.info(
+                f"jid={task.jid} started",
+                extra={"queue": task.queue, "operation": task.operation},
+            )
             await worker.perform(task.params)
             self.logger.info(f"jid={task.jid} done")
             await self._increment(self._store.increment_processed, task.queue)
@@ -95,9 +110,14 @@ class Consumer:
             try:
                 await asyncio.to_thread(self._store.push, retry_task)
             except StoreError as push_err:
-                self.logger.error(f"jid={task.jid} failed to requeue for retry", extra={"error": str(push_err)})
+                self.logger.error(
+                    f"jid={task.jid} failed to requeue for retry",
+                    extra={"error": str(push_err)},
+                )
         else:
-            self.logger.error(f"jid={task.jid} failed permanently", extra={"error": str(failure)})
+            self.logger.error(
+                f"jid={task.jid} failed permanently", extra={"error": str(failure)}
+            )
             await self._increment(self._store.increment_failed, task.queue)
 
     async def _increment(self, fn, queue: str) -> None:
