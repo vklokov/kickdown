@@ -43,6 +43,13 @@ class Queue:
     async def enqueue_due(self, now: float, limit: int) -> int:
         return await asyncio.to_thread(self._store.enqueue_due, self._name, now, limit)
 
+    async def purge(self) -> int:
+        """Drops every pending task, returning how many were dropped.
+
+        Scheduled tasks and the processed/failed counters are left alone.
+        """
+        return await asyncio.to_thread(self._store.purge, self._name)
+
     async def stats(self) -> Stats:
         return await asyncio.to_thread(self._store.stats, self._name)
 

@@ -104,6 +104,17 @@ class Store:
         except RedisError as e:
             raise StoreError(str(e)) from e
 
+    def purge(self, queue: str) -> int:
+        try:
+            # MULTI/EXEC so the reported count is exactly what was dropped
+            pipe = self._redis.pipeline()
+            pipe.llen(self.queue_key(queue))
+            pipe.delete(self.queue_key(queue))
+            length, _ = cast(tuple[int, int], pipe.execute())
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+        return length
+
     def queue_length(self, queue: str) -> int:
         try:
             return cast(int, self._redis.llen(self.queue_key(queue)))

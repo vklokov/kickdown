@@ -139,6 +139,14 @@ Enqueueing stays on the client (`client.enqueue(task)`): a `Task` already
 carries its own `queue`, and that field remains the single source of truth
 for routing.
 
+`purge()` drops every task waiting in the queue and returns how many were
+dropped. It does not touch scheduled tasks or the counters, and there is no
+undo:
+
+```python
+dropped = await emails.purge()
+```
+
 `processed` counts tasks whose worker completed successfully; `failed`
 counts tasks that were permanently dropped (retries exhausted, or no
 worker registered for the task's `operation`).

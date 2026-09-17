@@ -22,9 +22,10 @@
 - `Server` always starts a small HTTP server (`web_port`, default `3030`) with `/live` and `/ready` for liveness/readiness probes; `/ready` checks Redis connectivity
 - Per-queue `processed`/`failed` counters (`Stats` model) via `client.queue(name).stats()`; the consumer increments them on task completion, permanent failure (retries exhausted), and unrecognized operations
 - `GET /admin` renders an HTML dashboard: total processed/failed/scheduled counters, and a per-queue table of pending/scheduled/in-flight counts (in-flight is a placeholder until tasks are tracked while they run); optionally gated behind HTTP Basic Auth via `Server(admin_username=..., admin_password=...)` (no auth if either is left unset)
+- `Queue.purge()` drops every pending task in a queue and returns how many were dropped (scheduled tasks and counters are untouched); not exposed over HTTP
 - `Server.enqueue(task)` pushes a task using the server's own Redis connection, so workers/hooks can schedule tasks without a separate `Client`
 - A `Scheduler` loop runs inside every `Server`, moving due tasks from each queue's `rqueue:scheduled:{name}` set back into the queue (atomically, via a Lua script); a server only sweeps the queues it has workers for
-- `Queue`, a handle bound to one queue name, carrying every per-queue operation (`push`, `pending`, `length`, `scheduled`, `stats`, counters); obtained via `Client.queue(name)` / `Server.queue(name)`, and `Server.queues` now returns `Queue` objects instead of names
+- `Queue`, a handle bound to one queue name, carrying every per-queue operation (`push`, `pending`, `length`, `scheduled`, `stats`, `purge`, counters); obtained via `Client.queue(name)` / `Server.queue(name)`, and `Server.queues` now returns `Queue` objects instead of names
 
 ### Removed
 - The old `Loggable` protocol and the custom `Logger` wrapper class (replaced by the stdlib logger above)

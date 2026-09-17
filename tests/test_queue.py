@@ -69,6 +69,12 @@ async def test_counters_are_scoped_to_the_bound_queue(queue, mock_store):
     mock_store.increment_failed.assert_called_once_with("emails")
 
 
+async def test_purge_drops_the_bound_queue_and_reports_the_count(queue, mock_store):
+    mock_store.purge.return_value = 12
+    assert await queue.purge() == 12
+    mock_store.purge.assert_called_once_with("emails")
+
+
 async def test_store_errors_propagate(queue, mock_store):
     mock_store.queue_length.side_effect = StoreError("connection lost")
     with pytest.raises(StoreError):
