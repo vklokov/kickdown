@@ -1,6 +1,6 @@
 [project]
 name = "kickdown"
-version = "0.4.0"
+version = "0.4.0a1"
 description = "A Redis-backed background job queue for Python"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -19,6 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Distributed Computing",
+    "Typing :: Typed",
 ]
 dependencies = [
     "fastapi>=0.136.1",
