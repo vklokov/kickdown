@@ -11,6 +11,7 @@ from .store import Store, StoreError
 
 _default_pop_timeout = 5
 _retry_delay = 1
+_backoff_coefficient = 1.5
 
 
 class Consumer:
@@ -101,12 +102,19 @@ class Consumer:
             return
 
         if task.retry_count > 0:
+            delay = _retry_delay * _backoff_coefficient**task.attempt
             self.logger.warning(
-                f"jid={task.jid} failed, retrying ({task.retry_count} attempt(s) left)",
+                f"jid={task.jid} failed, retrying in {delay:.1f}s "
+                f"({task.retry_count} attempt(s) left)",
                 extra={"error": str(failure)},
             )
-            retry_task = task.model_copy(update={"retry_count": task.retry_count - 1})
-            await asyncio.sleep(_retry_delay)
+            retry_task = task.model_copy(
+                update={
+                    "retry_count": task.retry_count - 1,
+                    "attempt": task.attempt + 1,
+                }
+            )
+            await asyncio.sleep(delay)
             try:
                 await asyncio.to_thread(self._store.push, retry_task)
             except StoreError as push_err:

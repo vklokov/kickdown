@@ -18,6 +18,7 @@ class Task(BaseModel):
     params: dict
     jid: Annotated[str, Field(default_factory=lambda: uuid7str())]
     retry_count: Annotated[int, Field(default=1)]
+    attempt: Annotated[int, Field(default=0)]
 
 
 class Stats(BaseModel):

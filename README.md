@@ -85,8 +85,21 @@ jid = await server.enqueue(task)
 
 `retry_count` (default `1`) on `Task` sets how many times a failed task is
 retried before being dropped. On failure, the consumer re-enqueues the task
-with `retry_count` decremented by one, after a short fixed delay. Once
-`retry_count` reaches `0` the task is dropped.
+with `retry_count` decremented by one and `attempt` incremented by one, after
+an exponentially growing delay. Once `retry_count` reaches `0` the task is
+dropped.
+
+The delay is `1s * 1.5 ** attempt` — both the base delay and the backoff
+coefficient are fixed in the library and cannot be configured per task:
+
+| Retry | Delay |
+| ----- | ----- |
+| 1st   | 1.0s  |
+| 2nd   | 1.5s  |
+| 3rd   | 2.3s  |
+
+The concurrency slot is released before the delay, so a failing task never
+stalls the rest of the consumer.
 
 Queue names are raw identifiers (e.g. `"default"`, `"emails"`). The client
 constructs the full Redis key internally as `rqueue:queue:{name}`.

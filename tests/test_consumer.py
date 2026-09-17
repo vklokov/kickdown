@@ -145,6 +145,40 @@ async def test_run_task_retries_on_worker_failure(mock_store):
     assert pushed.jid == task.jid
 
 
+async def test_run_task_increments_attempt_on_retry(mock_store):
+    worker = make_worker("emails", "send")
+    worker.perform.side_effect = RuntimeError("boom")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+
+    await consumer._run_task(make_task(operation="send", retry_count=2, attempt=1))
+
+    pushed = mock_store.push.call_args[0][0]
+    assert pushed.attempt == 2
+
+
+async def test_retry_delay_grows_with_backoff_coefficient(mock_store, monkeypatch):
+    worker = make_worker("emails", "send")
+    worker.perform.side_effect = RuntimeError("boom")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+
+    monkeypatch.setattr(consumer_module, "_retry_delay", 1)
+    monkeypatch.setattr(consumer_module, "_backoff_coefficient", 2.0)
+
+    delays = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    for attempt in range(3):
+        await consumer._run_task(
+            make_task(operation="send", retry_count=3, attempt=attempt)
+        )
+
+    assert delays == [1, 2, 4]
+
+
 async def test_run_task_does_not_update_stats_while_retries_remain(mock_store):
     worker = make_worker("emails", "send")
     worker.perform.side_effect = RuntimeError("boom")

@@ -10,7 +10,7 @@
 - `Client.enqueue` now takes a single `Task` (carrying `queue`, `operation`, `params`, `jid`, `retry_count`) instead of a worker class and payload dict
 - `Client` is now fully async (`enqueue`, `pending`, `close`), and supports `async with` instead of a sync context manager
 - `Server` no longer takes a `Config` object; it's constructed directly with `redis_url` and `concurrency`
-- Retries no longer use exponential backoff (`backoff_coefficient` is gone from `Task`) — a failed task is retried after a short fixed delay until `retry_count` reaches `0`; the concurrency slot is released before that delay, so one failing task no longer stalls the whole consumer
+- Retries use a hardcoded exponential backoff (`1s * 1.5 ** attempt`) instead of a per-task `backoff_coefficient` — a failed task is retried with `retry_count` decremented and `attempt` incremented until `retry_count` reaches `0`; the concurrency slot is released before the delay, so one failing task no longer stalls the whole consumer
 - On shutdown, the server now waits for in-flight tasks (including ones mid-retry) to finish before closing the Redis connection
 
 ### Added
