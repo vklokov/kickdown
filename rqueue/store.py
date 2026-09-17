@@ -50,6 +50,12 @@ class Store:
         except RedisError as e:
             raise StoreError(str(e)) from e
 
+    def queue_length(self, queue: str) -> int:
+        try:
+            return cast(int, self._redis.llen(self.queue_key(queue)))
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
     def pop(self, queues: list[str], timeout: int) -> Task | None:
         try:
             keys = [self.queue_key(queue) for queue in queues]

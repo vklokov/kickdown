@@ -12,10 +12,19 @@ Hook = Callable[[], Awaitable[None]]
 
 
 class Server:
-    def __init__(self, redis_url: str, concurrency: int = 1, web_port: int = 3030):
+    def __init__(
+        self,
+        redis_url: str,
+        concurrency: int = 1,
+        web_port: int = 3030,
+        admin_username: str | None = None,
+        admin_password: str | None = None,
+    ):
         self._store = Store(redis_url)
         self._concurrency = concurrency
         self._web_port = web_port
+        self._admin_username = admin_username
+        self._admin_password = admin_password
         self._startup_hooks: list[Hook] = []
         self._shutdown_hooks: list[Hook] = []
         self._worker: dict[tuple[str, str], Performable] = {}
@@ -24,6 +33,10 @@ class Server:
     @property
     def store(self) -> Store:
         return self._store
+
+    @property
+    def queues(self) -> list[str]:
+        return sorted({worker.queue for worker in self._worker.values()})
 
     def add_workers(self, *args: Performable):
         for worker in args:
@@ -54,7 +67,12 @@ class Server:
             concurrency=self._concurrency,
             logger=self.logger,
         )
-        web = Web(port=self._web_port, server=self)
+        web = Web(
+            port=self._web_port,
+            server=self,
+            admin_username=self._admin_username,
+            admin_password=self._admin_password,
+        )
 
         await self._run_hooks(self._startup_hooks, "startup")
 
@@ -63,9 +81,8 @@ class Server:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, stop_event.set)
 
-        queues = sorted({worker.queue for worker in self._worker.values()})
         self.logger.info(
-            f"server starting (queues={queues}, concurrency={self._concurrency}, web_port={self._web_port})"
+            f"server starting (queues={self.queues}, concurrency={self._concurrency}, web_port={self._web_port})"
         )
 
         consume_task = asyncio.create_task(consumer.consume(), name="consumer")

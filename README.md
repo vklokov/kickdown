@@ -161,6 +161,26 @@ GET /ready  -> 200 {"status": "ok"}                          # Redis reachable
             -> 503 {"status": "redis unavailable"}           # Redis unreachable
 ```
 
+### Admin page
+
+`GET /admin` renders an HTML dashboard: a summary block with total
+processed/failed counters (aggregated across all queues, from the same
+counters as `client.stats()`), and a table of every polled queue with its
+current pending count (how many tasks are physically waiting in it).
+
+By default it's open to anyone who can reach the port. To require HTTP
+Basic Auth, set both `admin_username` and `admin_password`:
+
+```python
+server = Server(
+    redis_url=...,
+    admin_username="alice",
+    admin_password="secret",
+)
+```
+
+If either is left unset, `/admin` requires no credentials.
+
 ## Scaling
 
 `Server.run()` uses a single asyncio event loop with an `asyncio.Semaphore`

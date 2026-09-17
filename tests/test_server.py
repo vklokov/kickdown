@@ -40,6 +40,11 @@ def test_add_workers_allows_same_operation_on_different_queues(server):
     assert server._worker == {("q1", "process"): a, ("q2", "process"): b}
 
 
+def test_queues_returns_sorted_deduped_worker_queues(server):
+    server.add_workers(make_worker("reports", "a"), make_worker("emails", "b"), make_worker("emails", "c"))
+    assert server.queues == ["emails", "reports"]
+
+
 def test_on_startup_registers_and_returns_fn(server):
     async def hook():
         pass
@@ -97,7 +102,7 @@ async def test_run_executes_startup_and_shutdown_hooks_and_closes_store(server, 
     assert startup_calls == [1]
     assert shutdown_calls == [1]
     mock_store.close.assert_called_once()
-    MockWeb.assert_called_once_with(port=3030, server=server)
+    MockWeb.assert_called_once_with(port=3030, server=server, admin_username=None, admin_password=None)
 
 
 async def test_web_port_is_configurable(mock_store):
@@ -114,7 +119,26 @@ async def test_web_port_is_configurable(mock_store):
         MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
-    MockWeb.assert_called_once_with(port=9000, server=server)
+    MockWeb.assert_called_once_with(port=9000, server=server, admin_username=None, admin_password=None)
+
+
+async def test_admin_credentials_are_passed_to_web(mock_store):
+    with patch("rqueue.server.Store", return_value=mock_store):
+        server = Server("redis://localhost:6379", admin_username="alice", admin_password="secret")
+    server.add_workers(make_worker("q1", "a"))
+
+    with (
+        patch("rqueue.server.Consumer") as MockConsumer,
+        patch("rqueue.server.Web") as MockWeb,
+    ):
+        MockConsumer.return_value.consume = AsyncMock(return_value=None)
+        MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockWeb.return_value.run = AsyncMock(return_value=None)
+        await server.run()
+
+    MockWeb.assert_called_once_with(
+        port=3030, server=server, admin_username="alice", admin_password="secret"
+    )
 
 
 async def test_run_logs_and_still_shuts_down_on_unexpected_consumer_crash(server, mock_store):
