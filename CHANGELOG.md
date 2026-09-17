@@ -18,14 +18,11 @@
   - `Client` logs when a task is accepted (enqueued)
   - `Server` logs process start/shutdown (with the polled queues and concurrency), each task's start/completion, retries, permanent failures, and unrecognized operations — all messages include the task's `jid`
 - `Server` always starts a small HTTP server (`web_port`, default `3030`) with `/live` and `/ready` for liveness/readiness probes; `/ready` checks Redis connectivity
+- `Client.stats(queue)` returns per-queue `processed`/`failed` counters (`Stats` model); the consumer increments them on task completion, permanent failure (retries exhausted), and unrecognized operations
 
 ### Removed
 - The old `Loggable` protocol and the custom `Logger` wrapper class (replaced by the stdlib logger above)
-- Metrics: `Client.stats()`, the `Stats` model, and the `processed`/`failed` Redis counters
 - `Server.uptime()` / `Status` and the `humanize` dependency
-
-Metrics are expected to return in a future release, redesigned for the
-multi-queue model.
 
 ---
 

@@ -3,7 +3,7 @@ from typing import cast
 from redis import Redis
 from redis.exceptions import RedisError
 
-from .models import Task
+from .models import Stats, Task
 
 
 class StoreError(Exception):
@@ -12,6 +12,7 @@ class StoreError(Exception):
 
 class Store:
     _QUEUE_PREFIX = "rqueue:queue:"
+    _STATS_PREFIX = "rqueue:stats:"
 
     def __init__(self, redis_url: str):
         self._redis = Redis.from_url(redis_url)
@@ -19,6 +20,14 @@ class Store:
     @classmethod
     def queue_key(cls, name: str) -> str:
         return f"{cls._QUEUE_PREFIX}{name}"
+
+    @classmethod
+    def _processed_key(cls, queue: str) -> str:
+        return f"{cls._STATS_PREFIX}{queue}:processed"
+
+    @classmethod
+    def _failed_key(cls, queue: str) -> str:
+        return f"{cls._STATS_PREFIX}{queue}:failed"
 
     def ping(self) -> None:
         try:
@@ -54,6 +63,29 @@ class Store:
             return None
         _, raw = result
         return Task.model_validate_json(raw)
+
+    def increment_processed(self, queue: str) -> None:
+        try:
+            self._redis.incr(self._processed_key(queue))
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def increment_failed(self, queue: str) -> None:
+        try:
+            self._redis.incr(self._failed_key(queue))
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def stats(self, queue: str) -> Stats:
+        try:
+            processed = cast(bytes | None, self._redis.get(self._processed_key(queue)))
+            failed = cast(bytes | None, self._redis.get(self._failed_key(queue)))
+            return Stats(
+                processed=int(processed) if processed else 0,
+                failed=int(failed) if failed else 0,
+            )
+        except RedisError as e:
+            raise StoreError(str(e)) from e
 
     def close(self) -> None:
         self._redis.close()

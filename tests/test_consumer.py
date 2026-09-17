@@ -92,6 +92,16 @@ async def test_run_task_calls_worker_perform_with_params(mock_store):
     worker.perform.assert_awaited_once_with({"to": "a@b.com"})
 
 
+async def test_run_task_increments_processed_on_success(mock_store):
+    worker = make_worker("emails", "send")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+
+    await consumer._run_task(make_task(operation="send"))
+
+    mock_store.increment_processed.assert_called_once_with("emails")
+    mock_store.increment_failed.assert_not_called()
+
+
 async def test_run_task_does_not_dispatch_across_queues(mock_store):
     worker = make_worker("reports", "send")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
@@ -112,6 +122,16 @@ async def test_run_task_does_nothing_for_unknown_operation(mock_store):
     mock_store.push.assert_not_called()
 
 
+async def test_run_task_increments_failed_for_unknown_operation(mock_store):
+    consumer = Consumer(store=mock_store, workers={})
+
+    task = make_task(operation="missing")
+    await consumer._run_task(task)
+
+    mock_store.increment_failed.assert_called_once_with("emails")
+    mock_store.increment_processed.assert_not_called()
+
+
 async def test_run_task_retries_on_worker_failure(mock_store):
     worker = make_worker("emails", "send")
     worker.perform.side_effect = RuntimeError("boom")
@@ -125,6 +145,17 @@ async def test_run_task_retries_on_worker_failure(mock_store):
     assert pushed.jid == task.jid
 
 
+async def test_run_task_does_not_update_stats_while_retries_remain(mock_store):
+    worker = make_worker("emails", "send")
+    worker.perform.side_effect = RuntimeError("boom")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+
+    await consumer._run_task(make_task(operation="send", retry_count=2))
+
+    mock_store.increment_processed.assert_not_called()
+    mock_store.increment_failed.assert_not_called()
+
+
 async def test_run_task_drops_task_when_retries_exhausted(mock_store):
     worker = make_worker("emails", "send")
     worker.perform.side_effect = RuntimeError("boom")
@@ -134,6 +165,28 @@ async def test_run_task_drops_task_when_retries_exhausted(mock_store):
     await consumer._run_task(task)
 
     mock_store.push.assert_not_called()
+
+
+async def test_run_task_increments_failed_when_retries_exhausted(mock_store):
+    worker = make_worker("emails", "send")
+    worker.perform.side_effect = RuntimeError("boom")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+
+    await consumer._run_task(make_task(operation="send", retry_count=0))
+
+    mock_store.increment_failed.assert_called_once_with("emails")
+    mock_store.increment_processed.assert_not_called()
+
+
+async def test_run_task_logs_but_does_not_raise_when_stats_update_fails(mock_store):
+    worker = make_worker("emails", "send")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+    consumer.logger = MagicMock()
+    mock_store.increment_processed.side_effect = StoreError("connection lost")
+
+    await consumer._run_task(make_task(operation="send"))  # must not raise
+
+    consumer.logger.error.assert_called_with("failed to update stats", extra={"error": "connection lost"})
 
 
 async def test_run_task_swallows_store_error_on_retry_push(mock_store):

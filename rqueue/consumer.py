@@ -70,11 +70,13 @@ class Consumer:
                     "no worker registered for task",
                     extra={"jid": task.jid, "queue": task.queue, "operation": task.operation},
                 )
+                await self._increment(self._store.increment_failed, task.queue)
                 return
 
             self.logger.info(f"jid={task.jid} started", extra={"queue": task.queue, "operation": task.operation})
             await worker.perform(task.params)
             self.logger.info(f"jid={task.jid} done")
+            await self._increment(self._store.increment_processed, task.queue)
         except Exception as err:  # noqa: BLE001 - worker code is arbitrary; retry boundary must catch anything
             failure = err
         finally:
@@ -96,3 +98,10 @@ class Consumer:
                 self.logger.error(f"jid={task.jid} failed to requeue for retry", extra={"error": str(push_err)})
         else:
             self.logger.error(f"jid={task.jid} failed permanently", extra={"error": str(failure)})
+            await self._increment(self._store.increment_failed, task.queue)
+
+    async def _increment(self, fn, queue: str) -> None:
+        try:
+            await asyncio.to_thread(fn, queue)
+        except StoreError as err:
+            self.logger.error("failed to update stats", extra={"error": str(err)})

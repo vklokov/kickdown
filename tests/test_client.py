@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from rqueue.client import Client
-from rqueue.models import Task
+from rqueue.models import Stats, Task
 from rqueue.store import Store
 
 
@@ -56,6 +56,17 @@ async def test_pending_returns_store_result(client, mock_store):
     mock_store.pending.return_value = [task]
     result = await client.pending("emails")
     assert result == [task]
+
+
+async def test_stats_delegates_to_store_with_queue(client, mock_store):
+    await client.stats("emails")
+    mock_store.stats.assert_called_once_with("emails")
+
+
+async def test_stats_returns_store_result(client, mock_store):
+    mock_store.stats.return_value = Stats(processed=3, failed=1)
+    result = await client.stats("emails")
+    assert result == Stats(processed=3, failed=1)
 
 
 async def test_close_closes_store(client, mock_store):

@@ -1,7 +1,7 @@
 import asyncio
 
 from .log import default_logger
-from .models import Task
+from .models import Stats, Task
 from .store import Store
 
 
@@ -20,6 +20,9 @@ class Client:
 
     async def pending(self, queue: str) -> list[Task]:
         return await asyncio.to_thread(self._store.pending, queue)
+
+    async def stats(self, queue: str) -> Stats:
+        return await asyncio.to_thread(self._store.stats, queue)
 
     async def close(self):
         await asyncio.to_thread(self._store.close)

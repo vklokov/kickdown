@@ -88,7 +88,15 @@ constructs the full Redis key internally as `rqueue:queue:{name}`.
 ```python
 # Tasks waiting to be processed in a given queue (non-destructive)
 tasks = await client.pending("emails")
+
+# Cumulative processed/failed counters for that queue
+stats = await client.stats("emails")
+print(stats.processed, stats.failed)
 ```
+
+`processed` counts tasks whose worker completed successfully; `failed`
+counts tasks that were permanently dropped (retries exhausted, or no
+worker registered for the task's `operation`).
 
 ### Lifecycle hooks
 
@@ -152,13 +160,6 @@ GET /live   -> 200 {"status": "ok"}                         # process is up
 GET /ready  -> 200 {"status": "ok"}                          # Redis reachable
             -> 503 {"status": "redis unavailable"}           # Redis unreachable
 ```
-
-## Current limitations
-
-This version intentionally drops metrics (processed/failed counters) that
-existed in earlier releases, in favor of supporting an arbitrary number of
-queues — expected to return in a future release, redesigned for the
-multi-queue model.
 
 ## Scaling
 
