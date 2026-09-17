@@ -1,4 +1,4 @@
-# rqueue-py
+# kickdown
 
 A Redis-backed background job queue for Python.
 
@@ -27,7 +27,7 @@ every queue that has at least one registered worker.
 
 ```python
 import asyncio
-from rqueue import Server
+from kickdown import Server
 from your_workers import SendEmailWorker, ExportReportWorker
 
 server = Server(
@@ -49,7 +49,7 @@ currently no notion of priority between queues.
 ### Enqueueing jobs
 
 ```python
-from rqueue import Client, Task
+from kickdown import Client, Task
 
 client = Client(redis_url="redis://localhost:6379")
 
@@ -99,7 +99,7 @@ coefficient are fixed in the library and cannot be configured per task:
 | 3rd   | 2.3s  |
 
 A retried task is not held in memory while it waits: it goes into the queue's
-scheduled sorted set in Redis (`rqueue:scheduled:{name}`, scored by its due
+scheduled sorted set in Redis (`kickdown:scheduled:{name}`, scored by its due
 timestamp), and a scheduler loop running inside every server moves due tasks
 back into the queue. So a retry survives a process restart, and the
 concurrency slot is freed immediately instead of being blocked for the whole
@@ -113,7 +113,7 @@ running* — closing that window is the next step (an in-flight list per
 consumer plus a reaper).
 
 Queue names are raw identifiers (e.g. `"default"`, `"emails"`). The client
-constructs the full Redis key internally as `rqueue:queue:{name}`.
+constructs the full Redis key internally as `kickdown:queue:{name}`.
 
 ### Inspecting a queue
 
@@ -190,8 +190,8 @@ sink, etc.), just assign it:
 ```python
 import logging
 
-server.logger = logging.getLogger("myapp.rqueue")
-client.logger = logging.getLogger("myapp.rqueue")
+server.logger = logging.getLogger("myapp.kickdown")
+client.logger = logging.getLogger("myapp.kickdown")
 ```
 
 `Client` logs when a task is accepted. `Server` logs process start/shutdown

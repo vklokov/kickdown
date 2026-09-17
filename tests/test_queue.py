@@ -2,9 +2,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from rqueue.models import Stats, Task
-from rqueue.queue import Queue
-from rqueue.store import Store, StoreError
+from kickdown.models import Stats, Task
+from kickdown.queue import Queue
+from kickdown.store import Store, StoreError
 
 
 @pytest.fixture

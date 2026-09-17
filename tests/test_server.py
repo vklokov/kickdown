@@ -2,9 +2,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from rqueue.models import Task
-from rqueue.server import Server
-from rqueue.store import Store, StoreError
+from kickdown.models import Task
+from kickdown.server import Server
+from kickdown.store import Store, StoreError
 
 
 def make_worker(queue: str, operation: str) -> MagicMock:
@@ -23,7 +23,7 @@ def mock_store():
 
 @pytest.fixture
 def server(mock_store):
-    with patch("rqueue.server.Store", return_value=mock_store):
+    with patch("kickdown.server.Store", return_value=mock_store):
         return Server("redis://localhost:6379")
 
 
@@ -111,8 +111,8 @@ async def test_run_executes_startup_and_shutdown_hooks_and_closes_store(server, 
         shutdown_calls.append(1)
 
     with (
-        patch("rqueue.server.Consumer") as MockConsumer,
-        patch("rqueue.server.Web") as MockWeb,
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
@@ -129,9 +129,9 @@ async def test_run_starts_the_scheduler(server, mock_store):
     server.add_workers(make_worker("q1", "a"))
 
     with (
-        patch("rqueue.server.Consumer") as MockConsumer,
-        patch("rqueue.server.Web") as MockWeb,
-        patch("rqueue.server.Scheduler") as MockScheduler,
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
+        patch("kickdown.server.Scheduler") as MockScheduler,
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
@@ -146,13 +146,13 @@ async def test_run_starts_the_scheduler(server, mock_store):
 
 
 async def test_web_port_is_configurable(mock_store):
-    with patch("rqueue.server.Store", return_value=mock_store):
+    with patch("kickdown.server.Store", return_value=mock_store):
         server = Server("redis://localhost:6379", web_port=9000)
     server.add_workers(make_worker("q1", "a"))
 
     with (
-        patch("rqueue.server.Consumer") as MockConsumer,
-        patch("rqueue.server.Web") as MockWeb,
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
@@ -163,13 +163,13 @@ async def test_web_port_is_configurable(mock_store):
 
 
 async def test_admin_credentials_are_passed_to_web(mock_store):
-    with patch("rqueue.server.Store", return_value=mock_store):
+    with patch("kickdown.server.Store", return_value=mock_store):
         server = Server("redis://localhost:6379", admin_username="alice", admin_password="secret")
     server.add_workers(make_worker("q1", "a"))
 
     with (
-        patch("rqueue.server.Consumer") as MockConsumer,
-        patch("rqueue.server.Web") as MockWeb,
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
@@ -192,8 +192,8 @@ async def test_run_logs_and_still_shuts_down_on_unexpected_consumer_crash(server
         shutdown_calls.append(1)
 
     with (
-        patch("rqueue.server.Consumer") as MockConsumer,
-        patch("rqueue.server.Web") as MockWeb,
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
     ):
         MockConsumer.return_value.consume = AsyncMock(side_effect=RuntimeError("consumer died"))
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
@@ -214,8 +214,8 @@ async def test_run_logs_startup_hook_failure_and_continues(server, mock_store):
         raise ValueError("boom")
 
     with (
-        patch("rqueue.server.Consumer") as MockConsumer,
-        patch("rqueue.server.Web") as MockWeb,
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)

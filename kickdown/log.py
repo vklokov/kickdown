@@ -1,7 +1,7 @@
 import logging
 import sys
 
-_logger_name = "rqueue"
+_logger_name = "kickdown"
 
 
 def default_logger() -> logging.Logger:

@@ -4,10 +4,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-import rqueue.consumer as consumer_module
-from rqueue.consumer import Consumer
-from rqueue.models import Task
-from rqueue.store import Store, StoreError
+import kickdown.consumer as consumer_module
+from kickdown.consumer import Consumer
+from kickdown.models import Task
+from kickdown.store import Store, StoreError
 
 
 def make_worker(queue: str, operation: str) -> MagicMock:

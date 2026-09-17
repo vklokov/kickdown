@@ -4,10 +4,10 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPBasicCredentials
 
-from rqueue.models import Stats
-from rqueue.queue import Queue
-from rqueue.store import Store, StoreError
-from rqueue.web import Web
+from kickdown.models import Stats
+from kickdown.queue import Queue
+from kickdown.store import Store, StoreError
+from kickdown.web import Web
 
 
 @pytest.fixture
@@ -81,7 +81,7 @@ async def test_admin_raises_401_when_unauthorized(mock_store):
 async def test_admin_returns_html_when_no_auth_configured(web):
     response = await web._admin(credentials=None)
     assert response.status_code == 200
-    assert b"rqueue" in response.body
+    assert b"kickdown" in response.body
 
 
 # --- admin page rendering ---

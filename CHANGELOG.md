@@ -24,7 +24,7 @@
 - `GET /admin` renders an HTML dashboard: total processed/failed/scheduled counters, and a per-queue table of pending/scheduled/in-flight counts (in-flight is a placeholder until tasks are tracked while they run); optionally gated behind HTTP Basic Auth via `Server(admin_username=..., admin_password=...)` (no auth if either is left unset)
 - `Queue.purge()` drops every pending task in a queue and returns how many were dropped (scheduled tasks and counters are untouched); not exposed over HTTP
 - `Server.enqueue(task)` pushes a task using the server's own Redis connection, so workers/hooks can schedule tasks without a separate `Client`
-- A `Scheduler` loop runs inside every `Server`, moving due tasks from each queue's `rqueue:scheduled:{name}` set back into the queue (atomically, via a Lua script); a server only sweeps the queues it has workers for
+- A `Scheduler` loop runs inside every `Server`, moving due tasks from each queue's `kickdown:scheduled:{name}` set back into the queue (atomically, via a Lua script); a server only sweeps the queues it has workers for
 - `Queue`, a handle bound to one queue name, carrying every per-queue operation (`push`, `pending`, `length`, `scheduled`, `stats`, `purge`, counters); obtained via `Client.queue(name)` / `Server.queue(name)`, and `Server.queues` now returns `Queue` objects instead of names
 
 ### Removed
@@ -92,8 +92,8 @@
 ## 0.2.6 - 2026-05-20
 
 ### Changed
-- All Redis operations extracted into a new internal `Store` class (`rqueue/store.py`)
-- Redis key names (`rqueue:queue:*`, `rqueue:stats:*`) are now centralized in `Store`
+- All Redis operations extracted into a new internal `Store` class (`kickdown/store.py`)
+- Redis key names (`kickdown:queue:*`, `kickdown:stats:*`) are now centralized in `Store`
 - `Consumer` and `Client` no longer interact with Redis directly — all calls go through `Store`
 - `asyncio.to_thread` wrapping for blocking Redis calls moved from `Consumer` into `Store`
 
@@ -119,8 +119,8 @@
 ## 0.2.4 — 2026-05-19
 
 ### Changed
-- Queue names are now raw identifiers (e.g. `"default"`, `"emails"`); the full Redis key is constructed internally as `rqueue:queue:{name}`
-- Stats counters moved from a Redis hash to separate keys (`rqueue:stats:processed`, `rqueue:stats:failed`), incremented with `INCR`
+- Queue names are now raw identifiers (e.g. `"default"`, `"emails"`); the full Redis key is constructed internally as `kickdown:queue:{name}`
+- Stats counters moved from a Redis hash to separate keys (`kickdown:stats:processed`, `kickdown:stats:failed`), incremented with `INCR`
 
 ---
 
@@ -128,7 +128,7 @@
 
 ### Added
 - `Client.stats()` returns a `Stats` model with cumulative `processed` and `failed` job counts
-- Consumer increments `rqueue.stats.processed` / `rqueue.stats.failed` in Redis after each job completes or raises
+- Consumer increments `kickdown.stats.processed` / `kickdown.stats.failed` in Redis after each job completes or raises
 
 ---
 

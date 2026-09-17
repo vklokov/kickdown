@@ -26,9 +26,9 @@ return #due
 
 
 class Store:
-    _QUEUE_PREFIX = "rqueue:queue:"
-    _STATS_PREFIX = "rqueue:stats:"
-    _SCHEDULED_PREFIX = "rqueue:scheduled:"
+    _QUEUE_PREFIX = "kickdown:queue:"
+    _STATS_PREFIX = "kickdown:stats:"
+    _SCHEDULED_PREFIX = "kickdown:scheduled:"
 
     def __init__(self, redis_url: str):
         self._redis = Redis.from_url(redis_url)

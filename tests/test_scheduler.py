@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from rqueue.queue import Queue
-from rqueue.scheduler import Scheduler
-from rqueue.store import Store, StoreError
+from kickdown.queue import Queue
+from kickdown.scheduler import Scheduler
+from kickdown.store import Store, StoreError
 
 
 @pytest.fixture

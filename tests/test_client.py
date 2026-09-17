@@ -2,9 +2,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rqueue.client import Client
-from rqueue.models import Stats, Task
-from rqueue.store import Store
+from kickdown.client import Client
+from kickdown.models import Stats, Task
+from kickdown.store import Store
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def mock_store():
 
 @pytest.fixture
 def client(mock_store):
-    with patch("rqueue.client.Store", return_value=mock_store):
+    with patch("kickdown.client.Store", return_value=mock_store):
         return Client("redis://localhost:6379")
 
 
@@ -62,7 +62,7 @@ async def test_close_closes_store(client, mock_store):
 
 
 async def test_context_manager_closes_store_on_exit(mock_store):
-    with patch("rqueue.client.Store", return_value=mock_store):
+    with patch("kickdown.client.Store", return_value=mock_store):
         async with Client("redis://localhost:6379"):
             pass
     mock_store.close.assert_called_once()
@@ -70,7 +70,7 @@ async def test_context_manager_closes_store_on_exit(mock_store):
 
 async def test_context_manager_closes_store_on_exception(mock_store):
     with (
-        patch("rqueue.client.Store", return_value=mock_store),
+        patch("kickdown.client.Store", return_value=mock_store),
         pytest.raises(ValueError),
     ):
         async with Client("redis://localhost:6379"):
