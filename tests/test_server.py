@@ -85,14 +85,36 @@ async def test_run_executes_startup_and_shutdown_hooks_and_closes_store(server, 
     async def on_stop():
         shutdown_calls.append(1)
 
-    with patch("rqueue.server.Consumer") as MockConsumer:
+    with (
+        patch("rqueue.server.Consumer") as MockConsumer,
+        patch("rqueue.server.Web") as MockWeb,
+    ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
     assert startup_calls == [1]
     assert shutdown_calls == [1]
     mock_store.close.assert_called_once()
+    MockWeb.assert_called_once_with(port=3030, server=server)
+
+
+async def test_web_port_is_configurable(mock_store):
+    with patch("rqueue.server.Store", return_value=mock_store):
+        server = Server("redis://localhost:6379", web_port=9000)
+    server.add_workers(make_worker("q1", "a"))
+
+    with (
+        patch("rqueue.server.Consumer") as MockConsumer,
+        patch("rqueue.server.Web") as MockWeb,
+    ):
+        MockConsumer.return_value.consume = AsyncMock(return_value=None)
+        MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockWeb.return_value.run = AsyncMock(return_value=None)
+        await server.run()
+
+    MockWeb.assert_called_once_with(port=9000, server=server)
 
 
 async def test_run_logs_and_still_shuts_down_on_unexpected_consumer_crash(server, mock_store):
@@ -105,9 +127,13 @@ async def test_run_logs_and_still_shuts_down_on_unexpected_consumer_crash(server
     async def on_stop():
         shutdown_calls.append(1)
 
-    with patch("rqueue.server.Consumer") as MockConsumer:
+    with (
+        patch("rqueue.server.Consumer") as MockConsumer,
+        patch("rqueue.server.Web") as MockWeb,
+    ):
         MockConsumer.return_value.consume = AsyncMock(side_effect=RuntimeError("consumer died"))
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
     assert shutdown_calls == [1]
@@ -123,9 +149,13 @@ async def test_run_logs_startup_hook_failure_and_continues(server, mock_store):
     async def failing_hook():
         raise ValueError("boom")
 
-    with patch("rqueue.server.Consumer") as MockConsumer:
+    with (
+        patch("rqueue.server.Consumer") as MockConsumer,
+        patch("rqueue.server.Web") as MockWeb,
+    ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
     server.logger.error.assert_any_call(

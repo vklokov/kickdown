@@ -6,18 +6,24 @@ from .consumer import Consumer
 from .log import default_logger
 from .models import Performable
 from .store import Store, StoreError
+from .web import Web
 
 Hook = Callable[[], Awaitable[None]]
 
 
 class Server:
-    def __init__(self, redis_url: str, concurrency: int = 1):
+    def __init__(self, redis_url: str, concurrency: int = 1, web_port: int = 3030):
         self._store = Store(redis_url)
         self._concurrency = concurrency
+        self._web_port = web_port
         self._startup_hooks: list[Hook] = []
         self._shutdown_hooks: list[Hook] = []
         self._worker: dict[tuple[str, str], Performable] = {}
         self.logger = default_logger()
+
+    @property
+    def store(self) -> Store:
+        return self._store
 
     def add_workers(self, *args: Performable):
         for worker in args:
@@ -48,6 +54,7 @@ class Server:
             concurrency=self._concurrency,
             logger=self.logger,
         )
+        web = Web(port=self._web_port, server=self)
 
         await self._run_hooks(self._startup_hooks, "startup")
 
@@ -57,23 +64,30 @@ class Server:
             loop.add_signal_handler(sig, stop_event.set)
 
         queues = sorted({worker.queue for worker in self._worker.values()})
-        self.logger.info(f"server starting (queues={queues}, concurrency={self._concurrency})")
+        self.logger.info(
+            f"server starting (queues={queues}, concurrency={self._concurrency}, web_port={self._web_port})"
+        )
 
         consume_task = asyncio.create_task(consumer.consume(), name="consumer")
+        web_task = asyncio.create_task(web.run(), name="web")
         stop_task = asyncio.create_task(stop_event.wait(), name="stop")
 
         try:
-            await asyncio.wait([consume_task, stop_task], return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait(
+                [consume_task, web_task, stop_task], return_when=asyncio.FIRST_COMPLETED
+            )
 
-            if consume_task.done() and not consume_task.cancelled():
-                exc = consume_task.exception()
-                if exc is not None:
-                    self.logger.error("consumer task failed unexpectedly", extra={"error": str(exc)})
+            for task in (consume_task, web_task):
+                if task.done() and not task.cancelled():
+                    exc = task.exception()
+                    if exc is not None:
+                        self.logger.error(f"{task.get_name()} task failed unexpectedly", extra={"error": str(exc)})
         finally:
             self.logger.info("server shutting down")
             consume_task.cancel()
+            web_task.cancel()
             stop_task.cancel()
-            await asyncio.gather(consume_task, stop_task, return_exceptions=True)
+            await asyncio.gather(consume_task, web_task, stop_task, return_exceptions=True)
             await consumer.drain()
 
             await self._run_hooks(self._shutdown_hooks, "shutdown")

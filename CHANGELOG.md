@@ -17,15 +17,15 @@
 - A default logger (plain `logging.Logger`, text output to stdout) on `Client` and `Server` — no custom logger interface/protocol; swap it by assigning `server.logger = ...` / `client.logger = ...`
   - `Client` logs when a task is accepted (enqueued)
   - `Server` logs process start/shutdown (with the polled queues and concurrency), each task's start/completion, retries, permanent failures, and unrecognized operations — all messages include the task's `jid`
+- `Server` always starts a small HTTP server (`web_port`, default `3030`) with `/live` and `/ready` for liveness/readiness probes; `/ready` checks Redis connectivity
 
 ### Removed
 - The old `Loggable` protocol and the custom `Logger` wrapper class (replaced by the stdlib logger above)
-- HTTP healthcheck server (`/live`, `/ready`) and its `fastapi`/`uvicorn` dependencies
 - Metrics: `Client.stats()`, the `Stats` model, and the `processed`/`failed` Redis counters
 - `Server.uptime()` / `Status` and the `humanize` dependency
 
-Healthcheck and metrics are expected to return in a future release,
-redesigned for the multi-queue model.
+Metrics are expected to return in a future release, redesigned for the
+multi-queue model.
 
 ---
 

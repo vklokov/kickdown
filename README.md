@@ -138,12 +138,27 @@ client.logger = logging.getLogger("myapp.rqueue")
 completion, retries and permanent failures — every task-related message
 includes the task's `jid`.
 
+### Healthcheck
+
+`Server` always starts a small HTTP server for liveness/readiness probes,
+on the port given by `web_port` (default `3030`):
+
+```python
+server = Server(redis_url=..., web_port=3030)
+```
+
+```
+GET /live   -> 200 {"status": "ok"}                         # process is up
+GET /ready  -> 200 {"status": "ok"}                          # Redis reachable
+            -> 503 {"status": "redis unavailable"}           # Redis unreachable
+```
+
 ## Current limitations
 
-This version intentionally drops the HTTP healthcheck and metrics
-(processed/failed counters) that existed in earlier releases, in favor of
-supporting an arbitrary number of queues — these are expected to return in
-a future release, redesigned for the multi-queue model.
+This version intentionally drops metrics (processed/failed counters) that
+existed in earlier releases, in favor of supporting an arbitrary number of
+queues — expected to return in a future release, redesigned for the
+multi-queue model.
 
 ## Scaling
 
