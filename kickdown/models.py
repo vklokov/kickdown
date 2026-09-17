@@ -1,4 +1,4 @@
-from typing import Annotated, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 from uuid_extensions import uuid7str
@@ -12,13 +12,18 @@ class Performable(Protocol):
     async def perform(self, payload: dict) -> None: ...
 
 
+# Workers are registered either as classes (with `perform` as a classmethod) or
+# as instances; both are called the same way.
+type Worker = type[Performable] | Performable
+
+
 class Task(BaseModel):
     queue: str
     operation: str
     params: dict
-    jid: Annotated[str, Field(default_factory=lambda: uuid7str())]
-    retry_count: Annotated[int, Field(default=1)]
-    attempt: Annotated[int, Field(default=0)]
+    jid: str = Field(default_factory=lambda: uuid7str())
+    retry_count: int = 1
+    attempt: int = 0
 
 
 class Stats(BaseModel):

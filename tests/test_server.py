@@ -18,6 +18,7 @@ def make_worker(queue: str, operation: str) -> MagicMock:
 @pytest.fixture
 def mock_store():
     store = MagicMock(spec=Store)
+    store.consumers.return_value = []
     return store
 
 
@@ -42,7 +43,11 @@ def test_add_workers_allows_same_operation_on_different_queues(server):
 
 
 def test_queues_returns_sorted_deduped_worker_queues(server):
-    server.add_workers(make_worker("reports", "a"), make_worker("emails", "b"), make_worker("emails", "c"))
+    server.add_workers(
+        make_worker("reports", "a"),
+        make_worker("emails", "b"),
+        make_worker("emails", "c"),
+    )
     assert [queue.name for queue in server.queues] == ["emails", "reports"]
 
 
@@ -96,7 +101,9 @@ async def test_run_raises_when_redis_ping_fails(server, mock_store):
         await server.run()
 
 
-async def test_run_executes_startup_and_shutdown_hooks_and_closes_store(server, mock_store):
+async def test_run_executes_startup_and_shutdown_hooks_and_closes_store(
+    server, mock_store
+):
     server.add_workers(make_worker("q1", "a"))
 
     startup_calls = []
@@ -116,13 +123,18 @@ async def test_run_executes_startup_and_shutdown_hooks_and_closes_store(server, 
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.stop = AsyncMock(return_value=None)
         MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
     assert startup_calls == [1]
     assert shutdown_calls == [1]
     mock_store.close.assert_called_once()
-    MockWeb.assert_called_once_with(port=3030, server=server, admin_username=None, admin_password=None)
+    MockWeb.assert_called_once_with(
+        port=3030, server=server, admin_username=None, admin_password=None
+    )
 
 
 async def test_run_starts_the_scheduler(server, mock_store):
@@ -135,6 +147,9 @@ async def test_run_starts_the_scheduler(server, mock_store):
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.stop = AsyncMock(return_value=None)
         MockWeb.return_value.run = AsyncMock(return_value=None)
         MockScheduler.return_value.run = AsyncMock(return_value=None)
         await server.run()
@@ -143,6 +158,70 @@ async def test_run_starts_the_scheduler(server, mock_store):
     assert [queue.name for queue in scheduler_kwargs["queues"]] == ["q1"]
     assert scheduler_kwargs["logger"] is server.logger
     MockScheduler.return_value.run.assert_awaited_once()
+
+
+async def test_run_starts_the_reaper(server, mock_store):
+    server.add_workers(make_worker("q1", "a"))
+
+    with (
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
+        patch("kickdown.server.Reaper") as MockReaper,
+    ):
+        MockConsumer.return_value.consume = AsyncMock(return_value=None)
+        MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.stop = AsyncMock(return_value=None)
+        MockWeb.return_value.run = AsyncMock(return_value=None)
+        MockReaper.return_value.run = AsyncMock(return_value=None)
+        await server.run()
+
+    MockReaper.assert_called_once_with(store=mock_store, logger=server.logger)
+    MockReaper.return_value.run.assert_awaited_once()
+
+
+async def test_run_registers_the_consumer_and_releases_it_on_shutdown(server):
+    server.add_workers(make_worker("q1", "a"))
+
+    with (
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
+    ):
+        MockConsumer.return_value.consume = AsyncMock(return_value=None)
+        MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.stop = AsyncMock(return_value=None)
+        MockWeb.return_value.run = AsyncMock(return_value=None)
+        await server.run()
+
+    MockConsumer.return_value.start.assert_awaited_once()
+    MockConsumer.return_value.heartbeat.assert_awaited_once()
+    MockConsumer.return_value.stop.assert_awaited_once()
+
+
+async def test_consumer_is_stopped_after_in_flight_tasks_drain(server):
+    server.add_workers(make_worker("q1", "a"))
+    order = []
+
+    with (
+        patch("kickdown.server.Consumer") as MockConsumer,
+        patch("kickdown.server.Web") as MockWeb,
+    ):
+        MockConsumer.return_value.consume = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.drain = AsyncMock(
+            side_effect=lambda: order.append("drain")
+        )
+        MockConsumer.return_value.stop = AsyncMock(
+            side_effect=lambda: order.append("stop")
+        )
+        MockWeb.return_value.run = AsyncMock(return_value=None)
+        await server.run()
+
+    assert order == ["drain", "stop"]
 
 
 async def test_web_port_is_configurable(mock_store):
@@ -156,15 +235,22 @@ async def test_web_port_is_configurable(mock_store):
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.stop = AsyncMock(return_value=None)
         MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
-    MockWeb.assert_called_once_with(port=9000, server=server, admin_username=None, admin_password=None)
+    MockWeb.assert_called_once_with(
+        port=9000, server=server, admin_username=None, admin_password=None
+    )
 
 
 async def test_admin_credentials_are_passed_to_web(mock_store):
     with patch("kickdown.server.Store", return_value=mock_store):
-        server = Server("redis://localhost:6379", admin_username="alice", admin_password="secret")
+        server = Server(
+            "redis://localhost:6379", admin_username="alice", admin_password="secret"
+        )
     server.add_workers(make_worker("q1", "a"))
 
     with (
@@ -173,6 +259,9 @@ async def test_admin_credentials_are_passed_to_web(mock_store):
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.stop = AsyncMock(return_value=None)
         MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
@@ -181,7 +270,9 @@ async def test_admin_credentials_are_passed_to_web(mock_store):
     )
 
 
-async def test_run_logs_and_still_shuts_down_on_unexpected_consumer_crash(server, mock_store):
+async def test_run_logs_and_still_shuts_down_on_unexpected_consumer_crash(
+    server, mock_store
+):
     server.add_workers(make_worker("q1", "a"))
     server.logger = MagicMock()
 
@@ -195,8 +286,13 @@ async def test_run_logs_and_still_shuts_down_on_unexpected_consumer_crash(server
         patch("kickdown.server.Consumer") as MockConsumer,
         patch("kickdown.server.Web") as MockWeb,
     ):
-        MockConsumer.return_value.consume = AsyncMock(side_effect=RuntimeError("consumer died"))
+        MockConsumer.return_value.consume = AsyncMock(
+            side_effect=RuntimeError("consumer died")
+        )
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.stop = AsyncMock(return_value=None)
         MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
@@ -219,6 +315,9 @@ async def test_run_logs_startup_hook_failure_and_continues(server, mock_store):
     ):
         MockConsumer.return_value.consume = AsyncMock(return_value=None)
         MockConsumer.return_value.drain = AsyncMock(return_value=None)
+        MockConsumer.return_value.heartbeat = AsyncMock(return_value=None)
+        MockConsumer.return_value.start = AsyncMock(return_value=None)
+        MockConsumer.return_value.stop = AsyncMock(return_value=None)
         MockWeb.return_value.run = AsyncMock(return_value=None)
         await server.run()
 

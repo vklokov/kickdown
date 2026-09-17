@@ -2,6 +2,20 @@
 
 ## 0.4.0 - 2026-09-17
 
+### Added
+- Tasks are no longer lost when a worker process dies mid-task: claiming a task atomically moves it from its queue into an in-flight list private to that consumer (`kickdown:inflight:{consumer_id}`), and it is only removed once the task finishes
+- Every server keeps a heartbeat key (`kickdown:beat:{consumer_id}`) alive and registers itself in `kickdown:consumers`; a `Reaper` loop returns the in-flight tasks of any consumer whose heartbeat expired, guarded by a lock so servers do not race
+- A clean shutdown returns the server's own unfinished tasks to their queues instead of leaving them for the reaper
+- The admin dashboard's `In-flight` column now shows real per-queue counts
+
+### Changed
+- Delivery is now at-least-once, so workers must be idempotent: a task interrupted by a crash runs again
+- Queues are polled by a Lua claim script instead of `BLPOP`; polling is now interval-based (100ms) because no Redis primitive can block on a move across several keys at once
+- Workers can be registered as classes with `perform` as a `classmethod`, not just as instances — `add_workers` accepts both, typed as the new `Worker` alias (`type[Performable] | Performable`); passing a class did not type-check before
+- `Task` field defaults are declared so that type checkers see them — `Task(queue=..., operation=..., params=...)` now type-checks for users, which it did not before despite the package shipping `py.typed`
+
+## 0.4.0a1 - 2026-09-17
+
 ### Changed
 - Rewritten around an arbitrary number of queues instead of a single configured queue
   - Workers (`Performable`) now declare their own `queue` and `operation`; the server derives the set of polled queues from the registered workers automatically

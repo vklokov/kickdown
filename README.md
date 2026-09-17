@@ -2,22 +2,43 @@
 
 A Redis-backed background job queue for Python.
 
+Requires Python 3.13+ and **Redis 6.2 or newer** (the queue relies on `LMOVE`
+and on server-side Lua scripts introduced in that release).
+
+## Installation
+
+```sh
+uv add kickdown
+```
+
+Pre-releases are not picked up by default, so ask for one explicitly:
+
+```sh
+uv add kickdown --prerelease=allow
+```
+
 ## Usage
 
 ### Defining a worker
 
-Implement the `Performable` protocol: declare which queue a worker consumes
-from and which `operation` name identifies it, plus the async `perform` method.
+A worker declares which queue it consumes from, which `operation` name
+identifies it, and an async `perform`:
 
 ```python
 class SendEmailWorker:
     queue = "emails"
     operation = "send_email"
 
-    async def perform(self, payload: dict) -> None:
+    @classmethod
+    async def perform(cls, payload: dict) -> None:
         recipient = payload["to"]
         # ... send email
 ```
+
+Workers are registered as classes, so nothing has to be instantiated to run a
+task. If a worker needs per-instance state, register an instance instead — with
+`perform` as a regular `async def perform(self, payload)`; both forms are
+accepted, and `Worker` is the type covering them.
 
 Any number of queues is supported — a worker's `queue` attribute is what
 determines which Redis list it consumes from. The server automatically polls
@@ -34,14 +55,14 @@ server = Server(
     redis_url="redis://localhost:6379",
     concurrency=5,  # optional, default: 1 - max tasks processed concurrently
 )
-server.add_workers(SendEmailWorker(), ExportReportWorker())
+server.add_workers(SendEmailWorker, ExportReportWorker)
 
 asyncio.run(server.run())
 ```
 
-`add_workers` accepts any number of `Performable` instances. Workers are
-resolved by their `(queue, operation)` pair, so the same `operation` name can
-be reused safely across different queues.
+`add_workers` accepts any number of workers, as classes or as instances.
+Workers are resolved by their `(queue, operation)` pair, so the same
+`operation` name can be reused safely across different queues.
 
 Queues are polled with equal frequency in round-robin order — there is
 currently no notion of priority between queues.
@@ -108,9 +129,27 @@ delay.
 A server only sweeps the queues it has workers for, which is also the only
 place its own retries can land.
 
-Note that a task is still lost if the process dies *while its worker is
-running* — closing that window is the next step (an in-flight list per
-consumer plus a reaper).
+#### Crash recovery
+
+A task is never held only in the worker process's memory. Claiming one moves
+it, in a single Redis operation, from its queue into an in-flight list private
+to that consumer (`kickdown:inflight:{consumer_id}`), where it stays until the
+worker finishes. Each server keeps a heartbeat key alive while it runs, and a
+reaper loop inside every server watches for consumers whose heartbeat has
+expired: whatever is left in a dead consumer's list is pushed back into the
+queue it came from. On a clean shutdown a server returns its own unfinished
+tasks immediately instead of waiting to be reaped.
+
+That makes delivery **at-least-once**: a task interrupted by a crash runs
+again, and a task that crashed the process *after* its side effects completed
+runs those side effects twice. Workers must be idempotent.
+
+Two consequences worth knowing:
+
+- A task that reliably kills its process (an OOM, say) will be requeued and
+  kill it again. There is no poison-pill limit yet.
+- A reaped task keeps its `retry_count`: being interrupted is not counted as a
+  failed attempt.
 
 Queue names are raw identifiers (e.g. `"default"`, `"emails"`). The client
 constructs the full Redis key internally as `kickdown:queue:{name}`.
@@ -159,9 +198,11 @@ initialising shared resources like database pools.
 ```python
 server = Server(redis_url=...)
 
+
 @server.on_startup
 async def init_db():
     app.db = await asyncpg.create_pool(DATABASE_URL)
+
 
 @server.on_shutdown
 async def close_db():

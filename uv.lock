@@ -95,7 +95,7 @@ wheels = [
 
 [[package]]
 name = "kickdown"
-version = "0.4.0a1"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

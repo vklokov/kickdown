@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPBasicCredentials
 
-from kickdown.models import Stats
+from kickdown.models import Stats, Task
 from kickdown.queue import Queue
 from kickdown.store import Store, StoreError
 from kickdown.web import Web
@@ -16,7 +16,13 @@ def mock_store():
     store.stats.return_value = Stats()
     store.queue_length.return_value = 0
     store.scheduled_length.return_value = 0
+    store.consumers.return_value = []
+    store.inflight.return_value = []
     return store
+
+
+def make_task(queue: str) -> Task:
+    return Task(queue=queue, operation="send", params={})
 
 
 def make_server(mock_store, queues: list[str]) -> MagicMock:
@@ -55,24 +61,44 @@ def test_authorized_when_no_credentials_configured(web):
 
 
 def test_authorized_rejects_missing_credentials_when_configured(mock_store):
-    web = Web(port=3030, server=make_server(mock_store, []), admin_username="a", admin_password="b")
+    web = Web(
+        port=3030,
+        server=make_server(mock_store, []),
+        admin_username="a",
+        admin_password="b",
+    )
     assert web._authorized(None) is False
 
 
 def test_authorized_rejects_wrong_password(mock_store):
-    web = Web(port=3030, server=make_server(mock_store, []), admin_username="a", admin_password="b")
+    web = Web(
+        port=3030,
+        server=make_server(mock_store, []),
+        admin_username="a",
+        admin_password="b",
+    )
     creds = HTTPBasicCredentials(username="a", password="wrong")
     assert web._authorized(creds) is False
 
 
 def test_authorized_accepts_correct_credentials(mock_store):
-    web = Web(port=3030, server=make_server(mock_store, []), admin_username="a", admin_password="b")
+    web = Web(
+        port=3030,
+        server=make_server(mock_store, []),
+        admin_username="a",
+        admin_password="b",
+    )
     creds = HTTPBasicCredentials(username="a", password="b")
     assert web._authorized(creds) is True
 
 
 async def test_admin_raises_401_when_unauthorized(mock_store):
-    web = Web(port=3030, server=make_server(mock_store, []), admin_username="a", admin_password="b")
+    web = Web(
+        port=3030,
+        server=make_server(mock_store, []),
+        admin_username="a",
+        admin_password="b",
+    )
     with pytest.raises(HTTPException) as exc_info:
         await web._admin(credentials=None)
     assert exc_info.value.status_code == 401
@@ -88,7 +114,9 @@ async def test_admin_returns_html_when_no_auth_configured(web):
 
 
 async def test_render_admin_includes_queue_pending_counts(mock_store):
-    mock_store.queue_length.side_effect = lambda queue: {"default": 156, "reports": 3}[queue]
+    mock_store.queue_length.side_effect = lambda queue: {"default": 156, "reports": 3}[
+        queue
+    ]
     web = Web(port=3030, server=make_server(mock_store, ["default", "reports"]))
 
     html = await web._render_admin()
@@ -98,7 +126,10 @@ async def test_render_admin_includes_queue_pending_counts(mock_store):
 
 
 async def test_render_admin_includes_totals_from_stats(mock_store):
-    mock_store.stats.side_effect = [Stats(processed=3, failed=1), Stats(processed=5, failed=0)]
+    mock_store.stats.side_effect = [
+        Stats(processed=3, failed=1),
+        Stats(processed=5, failed=0),
+    ]
     web = Web(port=3030, server=make_server(mock_store, ["emails", "reports"]))
 
     html = await web._render_admin()
@@ -129,6 +160,33 @@ async def test_render_admin_lists_scheduled_per_queue(mock_store):
 
     assert "<tr><td>emails</td><td>0</td><td>5</td>" in html
     assert "<tr><td>reports</td><td>0</td><td>2</td>" in html
+
+
+async def test_render_admin_counts_in_flight_tasks_per_queue(mock_store):
+    mock_store.queue_length.return_value = 0
+    mock_store.scheduled_length.return_value = 0
+    mock_store.consumers.return_value = ["host:1:aaa", "host:2:bbb"]
+    mock_store.inflight.side_effect = lambda consumer: {
+        "host:1:aaa": [make_task("emails"), make_task("reports")],
+        "host:2:bbb": [make_task("emails")],
+    }[consumer]
+    web = Web(port=3030, server=make_server(mock_store, ["emails", "reports"]))
+
+    html = await web._render_admin()
+
+    assert "<tr><td>emails</td><td>0</td><td>0</td><td>2</td></tr>" in html
+    assert "<tr><td>reports</td><td>0</td><td>0</td><td>1</td></tr>" in html
+
+
+async def test_render_admin_survives_an_unreadable_in_flight_list(mock_store):
+    mock_store.queue_length.return_value = 0
+    mock_store.scheduled_length.return_value = 0
+    mock_store.consumers.side_effect = StoreError("connection lost")
+    web = Web(port=3030, server=make_server(mock_store, ["emails"]))
+
+    html = await web._render_admin()
+
+    assert "<tr><td>emails</td><td>0</td><td>0</td><td>0</td></tr>" in html
 
 
 async def test_render_admin_handles_no_queues(web):
