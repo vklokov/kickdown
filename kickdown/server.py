@@ -4,8 +4,9 @@ from collections.abc import Awaitable, Callable
 
 from .consumer import Consumer
 from .log import default_logger
-from .models import Performable, Task
+from .models import Task, Worker
 from .queue import Queue
+from .reaper import Reaper
 from .scheduler import Scheduler
 from .store import Store, StoreError
 from .web import Web
@@ -29,7 +30,7 @@ class Server:
         self._admin_password = admin_password
         self._startup_hooks: list[Hook] = []
         self._shutdown_hooks: list[Hook] = []
-        self._worker: dict[tuple[str, str], Performable] = {}
+        self._worker: dict[tuple[str, str], Worker] = {}
         self.logger = default_logger()
 
     @property
@@ -46,7 +47,7 @@ class Server:
     def queue(self, name: str) -> Queue:
         return Queue(name, self._store)
 
-    def add_workers(self, *args: Performable):
+    def add_workers(self, *args: Worker):
         for worker in args:
             self._worker[(worker.queue, worker.operation)] = worker
 
@@ -84,6 +85,7 @@ class Server:
             logger=self.logger,
         )
         scheduler = Scheduler(queues=self.queues, logger=self.logger)
+        reaper = Reaper(store=self._store, logger=self.logger)
         web = Web(
             port=self._web_port,
             server=self,
@@ -92,6 +94,7 @@ class Server:
         )
 
         await self._run_hooks(self._startup_hooks, "startup")
+        await consumer.start()
 
         stop_event = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -104,17 +107,21 @@ class Server:
         )
 
         consume_task = asyncio.create_task(consumer.consume(), name="consumer")
+        beat_task = asyncio.create_task(consumer.heartbeat(), name="heartbeat")
         schedule_task = asyncio.create_task(scheduler.run(), name="scheduler")
+        reap_task = asyncio.create_task(reaper.run(), name="reaper")
         web_task = asyncio.create_task(web.run(), name="web")
         stop_task = asyncio.create_task(stop_event.wait(), name="stop")
 
+        background = (consume_task, beat_task, schedule_task, reap_task, web_task)
+
         try:
             await asyncio.wait(
-                [consume_task, schedule_task, web_task, stop_task],
+                [*background, stop_task],
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            for task in (consume_task, schedule_task, web_task):
+            for task in background:
                 if task.done() and not task.cancelled():
                     exc = task.exception()
                     if exc is not None:
@@ -124,14 +131,11 @@ class Server:
                         )
         finally:
             self.logger.info("server shutting down")
-            consume_task.cancel()
-            schedule_task.cancel()
-            web_task.cancel()
-            stop_task.cancel()
-            await asyncio.gather(
-                consume_task, schedule_task, web_task, stop_task, return_exceptions=True
-            )
+            for task in (*background, stop_task):
+                task.cancel()
+            await asyncio.gather(*background, stop_task, return_exceptions=True)
             await consumer.drain()
+            await consumer.stop()
 
             await self._run_hooks(self._shutdown_hooks, "shutdown")
 

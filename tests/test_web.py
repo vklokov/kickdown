@@ -4,7 +4,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import HTTPBasicCredentials
 
-from kickdown.models import Stats
+from kickdown.models import Stats, Task
 from kickdown.queue import Queue
 from kickdown.store import Store, StoreError
 from kickdown.web import Web
@@ -16,7 +16,13 @@ def mock_store():
     store.stats.return_value = Stats()
     store.queue_length.return_value = 0
     store.scheduled_length.return_value = 0
+    store.consumers.return_value = []
+    store.inflight.return_value = []
     return store
+
+
+def make_task(queue: str) -> Task:
+    return Task(queue=queue, operation="send", params={})
 
 
 def make_server(mock_store, queues: list[str]) -> MagicMock:
@@ -154,6 +160,33 @@ async def test_render_admin_lists_scheduled_per_queue(mock_store):
 
     assert "<tr><td>emails</td><td>0</td><td>5</td>" in html
     assert "<tr><td>reports</td><td>0</td><td>2</td>" in html
+
+
+async def test_render_admin_counts_in_flight_tasks_per_queue(mock_store):
+    mock_store.queue_length.return_value = 0
+    mock_store.scheduled_length.return_value = 0
+    mock_store.consumers.return_value = ["host:1:aaa", "host:2:bbb"]
+    mock_store.inflight.side_effect = lambda consumer: {
+        "host:1:aaa": [make_task("emails"), make_task("reports")],
+        "host:2:bbb": [make_task("emails")],
+    }[consumer]
+    web = Web(port=3030, server=make_server(mock_store, ["emails", "reports"]))
+
+    html = await web._render_admin()
+
+    assert "<tr><td>emails</td><td>0</td><td>0</td><td>2</td></tr>" in html
+    assert "<tr><td>reports</td><td>0</td><td>0</td><td>1</td></tr>" in html
+
+
+async def test_render_admin_survives_an_unreadable_in_flight_list(mock_store):
+    mock_store.queue_length.return_value = 0
+    mock_store.scheduled_length.return_value = 0
+    mock_store.consumers.side_effect = StoreError("connection lost")
+    web = Web(port=3030, server=make_server(mock_store, ["emails"]))
+
+    html = await web._render_admin()
+
+    assert "<tr><td>emails</td><td>0</td><td>0</td><td>0</td></tr>" in html
 
 
 async def test_render_admin_handles_no_queues(web):

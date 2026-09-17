@@ -87,11 +87,12 @@ class Web:
         scheduled = await asyncio.gather(
             *(queue.scheduled_length() for queue in queues)
         )
+        inflight = await self._inflight_by_queue()
 
         if queues:
             rows = "\n".join(
                 f"<tr><td>{escape(queue.name)}</td><td>{length}</td>"
-                f'<td>{due}</td><td class="muted">&mdash;</td></tr>'
+                f"<td>{due}</td><td>{inflight.get(queue.name, 0)}</td></tr>"
                 for queue, length, due in zip(queues, lengths, scheduled, strict=True)
             )
         else:
@@ -105,6 +106,24 @@ class Web:
             .replace("__TOTAL_SCHEDULED__", str(sum(scheduled)))
             .replace("__QUEUE_ROWS__", rows)
         )
+
+    async def _inflight_by_queue(self) -> dict[str, int]:
+        """Counts tasks being processed right now, grouped by their queue.
+
+        In-flight lists are per consumer, not per queue, so the tasks are read
+        back and tallied; the lists only ever hold as many entries as the
+        consumers' concurrency allows.
+        """
+        store = self._server.store
+        counts: dict[str, int] = {}
+        try:
+            consumers = await asyncio.to_thread(store.consumers)
+            for consumer_id in consumers:
+                for task in await asyncio.to_thread(store.inflight, consumer_id):
+                    counts[task.queue] = counts.get(task.queue, 0) + 1
+        except StoreError:
+            return {}
+        return counts
 
     async def run(self) -> None:
         config = uvicorn.Config(

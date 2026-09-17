@@ -24,15 +24,50 @@ redis.call('ZREM', KEYS[1], unpack(due))
 return #due
 """
 
+# Claims the first task available across the polled queues (KEYS, in poll
+# order) by moving it into the consumer's in-flight list (ARGV[1]) in one step,
+# so a task is never held only in the worker process's memory.
+_CLAIM_LUA = """
+for i = 1, #KEYS do
+    local payload = redis.call('LMOVE', KEYS[i], ARGV[1], 'LEFT', 'RIGHT')
+    if payload then
+        return payload
+    end
+end
+return false
+"""
+
+# Returns everything left in a dead consumer's in-flight list (KEYS[1]) to the
+# queue each task names, oldest first.
+_REAP_LUA = """
+local reaped = 0
+while true do
+    local payload = redis.call('LPOP', KEYS[1])
+    if not payload then
+        break
+    end
+    local task = cjson.decode(payload)
+    redis.call('RPUSH', ARGV[1] .. task['queue'], payload)
+    reaped = reaped + 1
+end
+return reaped
+"""
+
 
 class Store:
     _QUEUE_PREFIX = "kickdown:queue:"
     _STATS_PREFIX = "kickdown:stats:"
     _SCHEDULED_PREFIX = "kickdown:scheduled:"
+    _INFLIGHT_PREFIX = "kickdown:inflight:"
+    _BEAT_PREFIX = "kickdown:beat:"
+    _REAP_LOCK_PREFIX = "kickdown:reap:"
+    _CONSUMERS_KEY = "kickdown:consumers"
 
     def __init__(self, redis_url: str):
         self._redis = Redis.from_url(redis_url)
         self._enqueue_due = self._redis.register_script(_ENQUEUE_DUE_LUA)
+        self._claim = self._redis.register_script(_CLAIM_LUA)
+        self._reap = self._redis.register_script(_REAP_LUA)
 
     @classmethod
     def queue_key(cls, name: str) -> str:
@@ -41,6 +76,18 @@ class Store:
     @classmethod
     def scheduled_key(cls, name: str) -> str:
         return f"{cls._SCHEDULED_PREFIX}{name}"
+
+    @classmethod
+    def inflight_key(cls, consumer_id: str) -> str:
+        return f"{cls._INFLIGHT_PREFIX}{consumer_id}"
+
+    @classmethod
+    def _beat_key(cls, consumer_id: str) -> str:
+        return f"{cls._BEAT_PREFIX}{consumer_id}"
+
+    @classmethod
+    def _reap_lock_key(cls, consumer_id: str) -> str:
+        return f"{cls._REAP_LOCK_PREFIX}{consumer_id}"
 
     @classmethod
     def _processed_key(cls, queue: str) -> str:
@@ -121,19 +168,97 @@ class Store:
         except RedisError as e:
             raise StoreError(str(e)) from e
 
-    def pop(self, queues: list[str], timeout: int) -> Task | None:
+    def claim(self, queues: list[str], consumer_id: str) -> tuple[bytes, Task] | None:
+        """Moves the next available task into the consumer's in-flight list."""
         try:
-            keys = [self.queue_key(queue) for queue in queues]
-            result = cast(
-                tuple[bytes, bytes] | None,
-                self._redis.blpop(keys, timeout=timeout),
+            raw = cast(
+                bytes | None,
+                self._claim(
+                    keys=[self.queue_key(queue) for queue in queues],
+                    args=[self.inflight_key(consumer_id)],
+                ),
             )
         except RedisError as e:
             raise StoreError(str(e)) from e
-        if result is None:
+        if not raw:
             return None
-        _, raw = result
-        return Task.model_validate_json(raw)
+        return raw, Task.model_validate_json(raw)
+
+    def ack(self, consumer_id: str, raw: bytes) -> None:
+        """Drops a finished task from the in-flight list.
+
+        Matches on the exact payload that was claimed, so the stored bytes are
+        passed back rather than re-serialized from the model.
+        """
+        try:
+            self._redis.lrem(self.inflight_key(consumer_id), 1, raw)  # ty: ignore[invalid-argument-type]
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def inflight(self, consumer_id: str) -> list[Task]:
+        try:
+            raw_tasks = cast(
+                list[bytes], self._redis.lrange(self.inflight_key(consumer_id), 0, -1)
+            )
+            return [Task.model_validate_json(raw) for raw in raw_tasks]
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def register_consumer(self, consumer_id: str, ttl: int) -> None:
+        try:
+            pipe = self._redis.pipeline()
+            pipe.sadd(self._CONSUMERS_KEY, consumer_id)
+            pipe.set(self._beat_key(consumer_id), "1", ex=ttl)
+            pipe.execute()
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def heartbeat(self, consumer_id: str, ttl: int) -> None:
+        try:
+            self._redis.set(self._beat_key(consumer_id), "1", ex=ttl)
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def deregister_consumer(self, consumer_id: str) -> None:
+        try:
+            pipe = self._redis.pipeline()
+            pipe.srem(self._CONSUMERS_KEY, consumer_id)
+            pipe.delete(self._beat_key(consumer_id))
+            pipe.execute()
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def consumers(self) -> list[str]:
+        try:
+            ids = cast(set[bytes], self._redis.smembers(self._CONSUMERS_KEY))
+            return sorted(id.decode() for id in ids)
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def is_alive(self, consumer_id: str) -> bool:
+        try:
+            return bool(self._redis.exists(self._beat_key(consumer_id)))
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def claim_reap(self, consumer_id: str, ttl: int) -> bool:
+        """Takes the right to reap one dead consumer, so servers do not race."""
+        try:
+            acquired = self._redis.set(
+                self._reap_lock_key(consumer_id), "1", nx=True, ex=ttl
+            )
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+        return bool(acquired)
+
+    def reap(self, consumer_id: str) -> int:
+        try:
+            reaped = self._reap(
+                keys=[self.inflight_key(consumer_id)], args=[self._QUEUE_PREFIX]
+            )
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+        return cast(int, reaped)
 
     def increment_processed(self, queue: str) -> None:
         try:
