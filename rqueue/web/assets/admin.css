@@ -5,6 +5,7 @@
     --text: #e6e6e6;
     --muted: #9aa0ab;
     --danger: #ff5c5c;
+    --pending: #e5a13a;
     --border: #262b35;
 }
 
@@ -56,6 +57,10 @@ h1 {
 
 .stat.failed .value {
     color: var(--danger);
+}
+
+.stat.scheduled .value {
+    color: var(--pending);
 }
 
 table.queues {

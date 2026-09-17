@@ -75,6 +75,7 @@ class Web:
         lengths = await asyncio.gather(
             *(asyncio.to_thread(self._server.store.queue_length, queue) for queue in queues)
         )
+        scheduled = await asyncio.to_thread(self._server.store.scheduled_length)
 
         if queues:
             rows = "\n".join(
@@ -87,6 +88,7 @@ class Web:
         return (
             _ADMIN_TEMPLATE.replace("__TOTAL_PROCESSED__", str(sum(s.processed for s in stats)))
             .replace("__TOTAL_FAILED__", str(sum(s.failed for s in stats)))
+            .replace("__TOTAL_SCHEDULED__", str(scheduled))
             .replace("__QUEUE_ROWS__", rows)
         )
 

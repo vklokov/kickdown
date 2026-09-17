@@ -14,6 +14,7 @@ def mock_store():
     store = MagicMock(spec=Store)
     store.stats.return_value = Stats()
     store.queue_length.return_value = 0
+    store.scheduled_length.return_value = 0
     return store
 
 
@@ -103,6 +104,16 @@ async def test_render_admin_includes_totals_from_stats(mock_store):
 
     assert "8" in html  # total processed
     assert "1" in html  # total failed
+
+
+async def test_render_admin_includes_scheduled_count(mock_store):
+    mock_store.scheduled_length.return_value = 7
+    web = Web(port=3030, server=make_server(mock_store, ["emails"]))
+
+    html = await web._render_admin()
+
+    assert '<span class="value">7</span>' in html
+    assert "scheduled" in html
 
 
 async def test_render_admin_handles_no_queues(web):
