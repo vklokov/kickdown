@@ -34,6 +34,15 @@ class Queue:
     async def length(self) -> int:
         return await asyncio.to_thread(self._store.queue_length, self._name)
 
+    async def scheduled(self) -> list[Task]:
+        return await asyncio.to_thread(self._store.scheduled, self._name)
+
+    async def scheduled_length(self) -> int:
+        return await asyncio.to_thread(self._store.scheduled_length, self._name)
+
+    async def enqueue_due(self, now: float, limit: int) -> int:
+        return await asyncio.to_thread(self._store.enqueue_due, self._name, now, limit)
+
     async def stats(self) -> Stats:
         return await asyncio.to_thread(self._store.stats, self._name)
 

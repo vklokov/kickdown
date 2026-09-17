@@ -98,16 +98,15 @@ coefficient are fixed in the library and cannot be configured per task:
 | 2nd   | 1.5s  |
 | 3rd   | 2.3s  |
 
-A retried task is not held in memory while it waits: it goes into a scheduled
-sorted set in Redis (`rqueue:scheduled`, scored by its due timestamp), and a
-scheduler loop running inside every server moves due tasks back into their
-queue. So a retry survives a process restart, and the concurrency slot is
-freed immediately instead of being blocked for the whole delay.
+A retried task is not held in memory while it waits: it goes into the queue's
+scheduled sorted set in Redis (`rqueue:scheduled:{name}`, scored by its due
+timestamp), and a scheduler loop running inside every server moves due tasks
+back into the queue. So a retry survives a process restart, and the
+concurrency slot is freed immediately instead of being blocked for the whole
+delay.
 
-```python
-# Tasks waiting for their retry delay to elapse, across all queues
-tasks = await client.scheduled()
-```
+A server only sweeps the queues it has workers for, which is also the only
+place its own retries can land.
 
 Note that a task is still lost if the process dies *while its worker is
 running* — closing that window is the next step (an in-flight list per
@@ -118,14 +117,27 @@ constructs the full Redis key internally as `rqueue:queue:{name}`.
 
 ### Inspecting a queue
 
-```python
-# Tasks waiting to be processed in a given queue (non-destructive)
-tasks = await client.pending("emails")
+`client.queue(name)` returns a `Queue` handle — every per-queue operation
+lives on it, so the queue name is given once instead of on every call:
 
-# Cumulative processed/failed counters for that queue
-stats = await client.stats("emails")
+```python
+emails = client.queue("emails")
+
+# Tasks waiting to be processed (non-destructive)
+tasks = await emails.pending()
+count = await emails.length()
+
+# Tasks waiting for their retry delay to elapse
+retries = await emails.scheduled()
+
+# Cumulative processed/failed counters
+stats = await emails.stats()
 print(stats.processed, stats.failed)
 ```
+
+Enqueueing stays on the client (`client.enqueue(task)`): a `Task` already
+carries its own `queue`, and that field remains the single source of truth
+for routing.
 
 `processed` counts tasks whose worker completed successfully; `failed`
 counts tasks that were permanently dropped (retries exhausted, or no

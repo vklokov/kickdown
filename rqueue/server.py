@@ -83,7 +83,7 @@ class Server:
             concurrency=self._concurrency,
             logger=self.logger,
         )
-        scheduler = Scheduler(store=self._store, logger=self.logger)
+        scheduler = Scheduler(queues=self.queues, logger=self.logger)
         web = Web(
             port=self._web_port,
             server=self,

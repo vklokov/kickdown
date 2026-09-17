@@ -74,20 +74,21 @@ class Web:
         queues = self._server.queues
         stats = await asyncio.gather(*(queue.stats() for queue in queues))
         lengths = await asyncio.gather(*(queue.length() for queue in queues))
-        scheduled = await asyncio.to_thread(self._server.store.scheduled_length)
+        scheduled = await asyncio.gather(*(queue.scheduled_length() for queue in queues))
 
         if queues:
             rows = "\n".join(
-                f"<tr><td>{escape(queue.name)}</td><td>{length}</td></tr>"
-                for queue, length in zip(queues, lengths, strict=True)
+                f"<tr><td>{escape(queue.name)}</td><td>{length}</td>"
+                f"<td>{due}</td><td class=\"muted\">&mdash;</td></tr>"
+                for queue, length, due in zip(queues, lengths, scheduled, strict=True)
             )
         else:
-            rows = '<tr><td colspan="2">No queues registered</td></tr>'
+            rows = '<tr><td colspan="4">No queues registered</td></tr>'
 
         return (
             _ADMIN_TEMPLATE.replace("__TOTAL_PROCESSED__", str(sum(s.processed for s in stats)))
             .replace("__TOTAL_FAILED__", str(sum(s.failed for s in stats)))
-            .replace("__TOTAL_SCHEDULED__", str(scheduled))
+            .replace("__TOTAL_SCHEDULED__", str(sum(scheduled)))
             .replace("__QUEUE_ROWS__", rows)
         )
 

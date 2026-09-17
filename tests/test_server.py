@@ -139,7 +139,9 @@ async def test_run_starts_the_scheduler(server, mock_store):
         MockScheduler.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
-    MockScheduler.assert_called_once_with(store=mock_store, logger=server.logger)
+    scheduler_kwargs = MockScheduler.call_args.kwargs
+    assert [queue.name for queue in scheduler_kwargs["queues"]] == ["q1"]
+    assert scheduler_kwargs["logger"] is server.logger
     MockScheduler.return_value.run.assert_awaited_once()
 
 

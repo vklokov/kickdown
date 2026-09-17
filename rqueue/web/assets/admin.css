@@ -89,3 +89,7 @@ table.queues th {
 table.queues tr:last-child td {
     border-bottom: none;
 }
+
+table.queues td.muted {
+    color: var(--muted);
+}

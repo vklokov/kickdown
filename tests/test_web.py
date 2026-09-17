@@ -93,8 +93,8 @@ async def test_render_admin_includes_queue_pending_counts(mock_store):
 
     html = await web._render_admin()
 
-    assert "<tr><td>default</td><td>156</td></tr>" in html
-    assert "<tr><td>reports</td><td>3</td></tr>" in html
+    assert "<tr><td>default</td><td>156</td>" in html
+    assert "<tr><td>reports</td><td>3</td>" in html
 
 
 async def test_render_admin_includes_totals_from_stats(mock_store):
@@ -107,14 +107,28 @@ async def test_render_admin_includes_totals_from_stats(mock_store):
     assert "1" in html  # total failed
 
 
-async def test_render_admin_includes_scheduled_count(mock_store):
-    mock_store.scheduled_length.return_value = 7
-    web = Web(port=3030, server=make_server(mock_store, ["emails"]))
+async def test_render_admin_totals_scheduled_across_queues(mock_store):
+    mock_store.scheduled_length.side_effect = lambda queue: {"emails": 5, "reports": 2}[
+        queue
+    ]
+    web = Web(port=3030, server=make_server(mock_store, ["emails", "reports"]))
 
     html = await web._render_admin()
 
     assert '<span class="value">7</span>' in html
-    assert "scheduled" in html
+
+
+async def test_render_admin_lists_scheduled_per_queue(mock_store):
+    mock_store.queue_length.return_value = 0
+    mock_store.scheduled_length.side_effect = lambda queue: {"emails": 5, "reports": 2}[
+        queue
+    ]
+    web = Web(port=3030, server=make_server(mock_store, ["emails", "reports"]))
+
+    html = await web._render_admin()
+
+    assert "<tr><td>emails</td><td>0</td><td>5</td>" in html
+    assert "<tr><td>reports</td><td>0</td><td>2</td>" in html
 
 
 async def test_render_admin_handles_no_queues(web):

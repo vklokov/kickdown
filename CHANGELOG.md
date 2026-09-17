@@ -8,6 +8,7 @@
   - Queues are polled in round-robin order with equal frequency — no priority between queues at this stage
   - Workers are keyed by `(queue, operation)`, so the same `operation` name can be reused safely across different queues
 - `Client.enqueue` now takes a single `Task` (carrying `queue`, `operation`, `params`, `jid`, `retry_count`) instead of a worker class and payload dict
+- `Client.pending(queue)` / `Client.stats(queue)` moved onto the queue handle: `client.queue(name).pending()` / `.stats()`
 - `Client` is now fully async (`enqueue`, `pending`, `close`), and supports `async with` instead of a sync context manager
 - `Server` no longer takes a `Config` object; it's constructed directly with `redis_url` and `concurrency`
 - Retries use a hardcoded exponential backoff (`1s * 1.5 ** attempt`) instead of a per-task `backoff_coefficient` — a failed task is retried with `retry_count` decremented and `attempt` incremented until `retry_count` reaches `0`
@@ -19,10 +20,11 @@
   - `Client` logs when a task is accepted (enqueued)
   - `Server` logs process start/shutdown (with the polled queues and concurrency), each task's start/completion, retries, permanent failures, and unrecognized operations — all messages include the task's `jid`
 - `Server` always starts a small HTTP server (`web_port`, default `3030`) with `/live` and `/ready` for liveness/readiness probes; `/ready` checks Redis connectivity
-- `Client.stats(queue)` returns per-queue `processed`/`failed` counters (`Stats` model); the consumer increments them on task completion, permanent failure (retries exhausted), and unrecognized operations
-- `GET /admin` renders an HTML dashboard: total processed/failed/scheduled counters, and a per-queue table of current pending task counts; optionally gated behind HTTP Basic Auth via `Server(admin_username=..., admin_password=...)` (no auth if either is left unset)
+- Per-queue `processed`/`failed` counters (`Stats` model) via `client.queue(name).stats()`; the consumer increments them on task completion, permanent failure (retries exhausted), and unrecognized operations
+- `GET /admin` renders an HTML dashboard: total processed/failed/scheduled counters, and a per-queue table of pending/scheduled/in-flight counts (in-flight is a placeholder until tasks are tracked while they run); optionally gated behind HTTP Basic Auth via `Server(admin_username=..., admin_password=...)` (no auth if either is left unset)
 - `Server.enqueue(task)` pushes a task using the server's own Redis connection, so workers/hooks can schedule tasks without a separate `Client`
-- A `Scheduler` loop runs inside every `Server`, moving due tasks from `rqueue:scheduled` back into their queues (atomically, via a Lua script); `Client.scheduled()` lists the tasks currently waiting there
+- A `Scheduler` loop runs inside every `Server`, moving due tasks from each queue's `rqueue:scheduled:{name}` set back into the queue (atomically, via a Lua script); a server only sweeps the queues it has workers for
+- `Queue`, a handle bound to one queue name, carrying every per-queue operation (`push`, `pending`, `length`, `scheduled`, `stats`, counters); obtained via `Client.queue(name)` / `Server.queue(name)`, and `Server.queues` now returns `Queue` objects instead of names
 
 ### Removed
 - The old `Loggable` protocol and the custom `Logger` wrapper class (replaced by the stdlib logger above)
