@@ -1,9 +1,25 @@
 [project]
 name = "kickdown"
 version = "0.4.0"
-description = "Add your description here"
+description = "A Redis-backed background job queue for Python"
 readme = "README.md"
 requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Vladimir Klokov", email = "klokov.dev@gmail.com" },
+]
+keywords = ["redis", "queue", "jobs", "tasks", "background", "worker", "asyncio"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+]
 dependencies = [
     "fastapi>=0.136.1",
     "pydantic>=2.13.4",
@@ -11,6 +27,12 @@ dependencies = [
     "uuid7>=0.1.0",
     "uvicorn>=0.34.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/vklokov/kickdown"
+Repository = "https://github.com/vklokov/kickdown"
+Issues = "https://github.com/vklokov/kickdown/issues"
+Changelog = "https://github.com/vklokov/kickdown/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
