@@ -50,7 +50,7 @@ class Reaper:
                 ):
                     continue
                 reaped = await asyncio.to_thread(self._store.reap, consumer_id)
-                await asyncio.to_thread(self._store.deregister_consumer, consumer_id)
+                await asyncio.to_thread(self._store.forget_if_dead, consumer_id)
             except StoreError as err:
                 self.logger.error(
                     "redis error while reaping consumer",
