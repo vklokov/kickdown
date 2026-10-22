@@ -3,7 +3,9 @@
 A Redis-backed background job queue for Python.
 
 Requires Python 3.13+ and **Redis 6.2 or newer** (the queue relies on `LMOVE`
-and on server-side Lua scripts introduced in that release).
+and on server-side Lua scripts introduced in that release). It runs against a
+single Redis instance or a master managed by [Redis Sentinel](#redis-sentinel),
+following the master through a failover.
 
 ## Installation
 
@@ -52,7 +54,7 @@ from kickdown import Server
 from your_workers import SendEmailWorker, ExportReportWorker
 
 server = Server(
-    redis_url="redis://localhost:6379",
+    redis_url="redis://localhost:6379",  # or redis+sentinel://..., see below
     concurrency=5,  # optional, default: 1 - max tasks processed concurrently
 )
 server.add_workers(SendEmailWorker, ExportReportWorker)
@@ -66,6 +68,84 @@ Workers are resolved by their `(queue, operation)` pair, so the same
 
 Queues are polled with equal frequency in round-robin order — there is
 currently no notion of priority between queues.
+
+### Redis Sentinel
+
+To run against a master managed by [Redis Sentinel](https://redis.io/docs/latest/operate/oss_and_stack/management/sentinel/),
+give `Client` and `Server` a `redis+sentinel://` URL instead of a `redis://`
+one. Nothing else changes:
+
+```python
+server = Server(
+    redis_url="redis+sentinel://sentinel-0:26379,sentinel-1:26379,sentinel-2:26379/mymaster",
+)
+```
+
+```
+redis+sentinel://[[username]:password@]host[:port][,host[:port]...]/master_name[?options]
+```
+
+- The hosts are the sentinels, not the Redis nodes; a host without a port
+  uses `26379`. List every sentinel you have — a sentinel that is down is
+  skipped, so one is enough to find the master as long as it answers.
+- The path is the master name the sentinels monitor (`sentinel monitor
+  <name> ...`).
+- `username`/`password` in the URL authenticate against the Redis master.
+  Sentinels have their own ACLs, so they take `sentinel_username` and
+  `sentinel_password` from the query string instead.
+
+Query options:
+
+| Option                   | Default | Meaning                                              |
+| ------------------------ | ------- | ---------------------------------------------------- |
+| `db`                     | `0`     | Database number on the master                        |
+| `sentinel_username`      | –       | ACL user for the sentinels                           |
+| `sentinel_password`      | –       | Password for the sentinels                           |
+| `socket_timeout`         | `5`     | Seconds a command may take before it counts as failed |
+| `socket_connect_timeout` | `2`     | Seconds to establish a TCP connection                |
+
+The timeouts apply to sentinel and master connections alike. Unlike plain
+`redis://` URLs, which keep redis-py's default of no timeout, the Sentinel
+mode sets them so that a node that disappears without closing its sockets
+cannot hang a call indefinitely — a hung heartbeat would get the consumer
+reaped by its peers while it is still working.
+
+#### What happens during a failover
+
+Every connection asks the sentinels where the master currently is before it
+is established, and a failed command drops its connection, so the next call
+resolves the master again and lands on the new one as soon as the sentinels
+announce it. A connection still pointed at the old master after it came back
+as a replica is dropped on the first `READONLY` reply the same way.
+
+No command is ever re-sent by the client, in Sentinel mode or otherwise: a
+reply lost to a timeout does not mean the command did not run, and
+re-sending a claim or a push would strand a task in an in-flight list nobody
+is working on, or enqueue it twice. A call that fails raises `StoreError`
+instead, and each caller decides what to do with it.
+
+Inside `Server`, nothing dies while the master is unreachable: the consumer,
+scheduler, reaper and heartbeat loops log the error and retry on their own
+schedule, and `/ready` answers `503` until Redis is back while `/live`
+stays `200`. The consumer backs off from its 100ms poll interval up to 2s
+between attempts while claims keep failing, logging the first failure, a
+line each time the wait grows, and then one roughly every 30s; it logs once
+more when Redis answers again and goes back to polling at full speed. Tasks that were in flight when the master went down are kept in
+the consumer's in-flight list, which the replica has (asynchronously)
+replicated, and run to completion on the worker. `Client.enqueue` and
+`Server.enqueue` raise `StoreError` for the duration of the switch, as they
+do for any other Redis error — what to do with a task that could not be
+accepted is the caller's call.
+
+Two consequences of the at-least-once model are worth knowing here:
+
+- Replication is asynchronous, so the last few writes before a crash can be
+  lost with the old master: a task enqueued or acknowledged a moment before
+  the failure may reappear (and run again) or vanish.
+- An outage longer than the heartbeat TTL (30s) expires every consumer's
+  heartbeat on the new master. The first reaper to run after the failover
+  requeues the tasks those consumers were still working on, so they run
+  twice. Consumers re-register themselves with the next heartbeat.
 
 ### Enqueueing jobs
 
@@ -138,7 +218,11 @@ worker finishes. Each server keeps a heartbeat key alive while it runs, and a
 reaper loop inside every server watches for consumers whose heartbeat has
 expired: whatever is left in a dead consumer's list is pushed back into the
 queue it came from. On a clean shutdown a server returns its own unfinished
-tasks immediately instead of waiting to be reaped.
+tasks immediately instead of waiting to be reaped. A consumer re-registers
+itself with every heartbeat, so one that was reaped while Redis was
+unreachable (and is in fact still running) is watched again as soon as it
+is back in touch; the reaper only forgets a consumer whose heartbeat is
+still missing at that moment.
 
 That makes delivery **at-least-once**: a task interrupted by a crash runs
 again, and a task that crashed the process *after* its side effects completed
@@ -280,6 +364,7 @@ If either is left unset, `/admin` requires no credentials.
 `Server.run()` uses a single asyncio event loop with an `asyncio.Semaphore`
 to cap concurrent task execution within the process — this is a good fit
 since `Performable.perform` is a coroutine. To scale across CPU cores or
-machines, run multiple `Server` processes against the same Redis instance;
-each process independently pops from the shared queues, so Redis balances
-the work between them without any extra coordination.
+machines, run multiple `Server` processes against the same Redis (a single
+instance or a Sentinel-managed master); each process independently claims
+from the shared queues, so Redis balances the work between them without any
+extra coordination.

@@ -27,7 +27,7 @@ async def test_tick_leaves_live_consumers_alone(reaper, mock_store):
     await reaper._tick()
 
     mock_store.reap.assert_not_called()
-    mock_store.deregister_consumer.assert_not_called()
+    mock_store.forget_if_dead.assert_not_called()
 
 
 async def test_tick_requeues_tasks_of_a_dead_consumer(reaper, mock_store):
@@ -38,7 +38,7 @@ async def test_tick_requeues_tasks_of_a_dead_consumer(reaper, mock_store):
     await reaper._tick()
 
     mock_store.reap.assert_called_once_with("host:1:aaa")
-    mock_store.deregister_consumer.assert_called_once_with("host:1:aaa")
+    mock_store.forget_if_dead.assert_called_once_with("host:1:aaa")
 
 
 async def test_tick_skips_a_consumer_another_server_is_already_reaping(
@@ -51,7 +51,7 @@ async def test_tick_skips_a_consumer_another_server_is_already_reaping(
     await reaper._tick()
 
     mock_store.reap.assert_not_called()
-    mock_store.deregister_consumer.assert_not_called()
+    mock_store.forget_if_dead.assert_not_called()
 
 
 async def test_tick_reports_what_was_requeued(reaper, mock_store):

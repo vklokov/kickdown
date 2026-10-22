@@ -505,3 +505,101 @@ async def test_consume_claims_into_this_consumers_in_flight_list(
     queues, consumer_id = mock_store.claim.call_args[0]
     assert queues == ["emails"]
     assert consumer_id == consumer.id
+
+
+# --- backoff while Redis is unreachable ---
+
+
+def _cancel_after(calls: int):
+    delays: list[float] = []
+
+    async def fake_sleep(seconds):
+        delays.append(seconds)
+        if len(delays) >= calls:
+            raise asyncio.CancelledError
+
+    return delays, fake_sleep
+
+
+async def test_consume_backs_off_while_claims_keep_failing(mock_store, monkeypatch):
+    consumer = Consumer(
+        store=mock_store, workers=workers_dict(make_worker("emails", "send"))
+    )
+    mock_store.claim.side_effect = StoreError("connection refused")
+    delays, fake_sleep = _cancel_after(7)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.consume()
+
+    assert delays == [0.1, 0.2, 0.4, 0.8, 1.6, 2.0, 2.0]
+
+
+async def test_consume_logs_the_first_failure_then_only_when_the_wait_grows(
+    mock_store, monkeypatch
+):
+    consumer = Consumer(
+        store=mock_store, workers=workers_dict(make_worker("emails", "send"))
+    )
+    consumer.logger = MagicMock()
+    mock_store.claim.side_effect = StoreError("connection refused")
+    _, fake_sleep = _cancel_after(10)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.consume()
+
+    consumer.logger.error.assert_called_once_with(
+        "redis error while claiming task", extra={"error": "connection refused"}
+    )
+    # the wait grows on attempts 2..6 (0.2, 0.4, 0.8, 1.6, 2.0) and is then capped
+    assert consumer.logger.warning.call_count == 5
+    assert "retrying in 2.0s" in consumer.logger.warning.call_args.args[0]
+
+
+async def test_consume_reports_periodically_once_the_wait_is_capped(
+    mock_store, monkeypatch
+):
+    consumer = Consumer(
+        store=mock_store, workers=workers_dict(make_worker("emails", "send"))
+    )
+    consumer.logger = MagicMock()
+    mock_store.claim.side_effect = StoreError("connection refused")
+    monkeypatch.setattr(consumer_module, "_error_report_every", 10)
+    _, fake_sleep = _cancel_after(20)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.consume()
+
+    # 5 for growth, plus attempts 10 and 20
+    assert consumer.logger.warning.call_count == 7
+    assert "after 20 claim attempts" in consumer.logger.warning.call_args.args[0]
+
+
+async def test_consume_resets_the_backoff_once_a_claim_succeeds(
+    mock_store, monkeypatch
+):
+    consumer = Consumer(
+        store=mock_store, workers=workers_dict(make_worker("emails", "send"))
+    )
+    consumer.logger = MagicMock()
+    mock_store.claim.side_effect = [
+        StoreError("down"),
+        StoreError("down"),
+        StoreError("down"),
+        None,
+        StoreError("down again"),
+    ]
+    delays, fake_sleep = _cancel_after(5)
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.consume()
+
+    # three failures, an idle poll after recovery, then a fresh first failure
+    assert delays == [0.1, 0.2, 0.4, 0.1, 0.1]
+    consumer.logger.info.assert_called_once_with(
+        "redis reachable again after 3 failed claim attempt(s)"
+    )
+    assert consumer.logger.error.call_count == 2

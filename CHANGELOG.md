@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 - 2026-10-22
+
+### Added
+- Redis Sentinel support: `Client` and `Server` accept a `redis+sentinel://host[:port][,host...]/master_name[?db=&sentinel_password=&socket_timeout=&socket_connect_timeout=]` URL in place of a `redis://` one; the master is discovered through the sentinels and followed across a failover (a `READONLY` reply from a demoted master, or a connection error, re-resolves the master), so a node going down costs a few failed calls rather than the process. Plain `redis://`/`rediss://`/`unix://` URLs behave exactly as before
+- In Sentinel mode, connections carry a socket timeout (default 5s) and a connect timeout (default 2s), so a node that disappears without closing its sockets cannot hang a call indefinitely; a sentinel that does not answer is skipped rather than retried. No command is ever re-sent, as before: a client built on a Sentinel connection pool is given the same no-retry policy redis-py applies to plain `redis://` clients, because re-sending a claim or a push after a lost reply would strand or duplicate a task
+
+### Changed
+- While Redis is unreachable the consumer backs off from its 100ms poll interval up to 2s between claim attempts, and logs the first failure, a line whenever the wait grows and then one about every 30s, instead of an error line every 100ms for the whole outage; one more line marks the recovery
+
+### Fixed
+- A consumer's heartbeat now re-adds it to `kickdown:consumers` as well as refreshing its beat key, and the reaper only removes a reaped consumer from the registry if its beat key is still missing (`forget_if_dead`, a guarded Lua script). A consumer that outlived a Redis outage longer than the heartbeat TTL was reaped and removed from the registry while still running; the tasks it claimed afterwards would never have been reaped had it died
+- Closing a `Client`/`Server` in Sentinel mode also closes the connections opened to the sentinels, not only the master pool
+
 ## 0.4.0 - 2026-09-17
 
 ### Added

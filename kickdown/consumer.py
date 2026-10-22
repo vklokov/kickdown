@@ -15,6 +15,10 @@ from .queue import Queue
 from .store import Store, StoreError
 
 _default_poll_interval = 0.1
+# while Redis is unreachable the claim loop backs off from the poll interval
+# up to this, and once there reports every Nth failed attempt (~30s apart)
+_max_error_interval = 2.0
+_error_report_every = 15
 _retry_delay = 1
 _backoff_coefficient = 1.5
 _heartbeat_interval = 10
@@ -45,6 +49,8 @@ class Consumer:
         self._semaphore = asyncio.Semaphore(concurrency)
         self.logger = logger or default_logger()
         self._tasks: set[asyncio.Task] = set()
+        self._claim_failures = 0
+        self._error_interval = _default_poll_interval
 
     async def start(self) -> None:
         await asyncio.to_thread(self._store.register_consumer, self.id, _heartbeat_ttl)
@@ -89,10 +95,7 @@ class Consumer:
                 )
             except StoreError as err:
                 self._semaphore.release()
-                self.logger.error(
-                    "redis error while claiming task", extra={"error": str(err)}
-                )
-                await asyncio.sleep(_default_poll_interval)
+                await asyncio.sleep(self._claim_failed(err))
                 continue
             except ValidationError as err:
                 self._semaphore.release()
@@ -101,6 +104,7 @@ class Consumer:
                 )
                 continue
 
+            self._claim_succeeded()
             if claimed is None:
                 self._semaphore.release()
                 await asyncio.sleep(_default_poll_interval)
@@ -114,6 +118,42 @@ class Consumer:
     async def drain(self) -> None:
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    def _claim_failed(self, err: StoreError) -> float:
+        """Returns how long to wait before the next claim attempt.
+
+        The first failure is logged as an error and retried after the normal
+        poll interval; the wait then doubles up to `_max_error_interval`,
+        with a line whenever it grows and a periodic one once it is capped,
+        so an outage (a Sentinel failover, say) does not flood the log at the
+        poll rate.
+        """
+        self._claim_failures += 1
+        if self._claim_failures == 1:
+            self.logger.error(
+                "redis error while claiming task", extra={"error": str(err)}
+            )
+            return self._error_interval
+
+        interval = min(self._error_interval * 2, _max_error_interval)
+        grew = interval > self._error_interval
+        self._error_interval = interval
+        if grew or self._claim_failures % _error_report_every == 0:
+            self.logger.warning(
+                f"redis still unreachable after {self._claim_failures} claim "
+                f"attempts, retrying in {interval:.1f}s",
+                extra={"error": str(err)},
+            )
+        return interval
+
+    def _claim_succeeded(self) -> None:
+        if self._claim_failures:
+            self.logger.info(
+                f"redis reachable again after {self._claim_failures} failed "
+                "claim attempt(s)"
+            )
+        self._claim_failures = 0
+        self._error_interval = _default_poll_interval
 
     def _poll_order(self) -> list[str]:
         order = list(self._order)

@@ -1,8 +1,8 @@
 from typing import cast
 
-from redis import Redis
 from redis.exceptions import RedisError
 
+from .connection import close, connect
 from .models import Stats, Task
 
 
@@ -53,6 +53,17 @@ end
 return reaped
 """
 
+# Drops a consumer (ARGV[1]) from the registry (KEYS[2]) only if its beat key
+# (KEYS[1]) is still missing: a consumer that outlived an outage may have
+# re-registered itself between the liveness check and this call, and must not
+# be forgotten while it keeps claiming tasks.
+_FORGET_DEAD_LUA = """
+if redis.call('EXISTS', KEYS[1]) == 1 then
+    return 0
+end
+return redis.call('SREM', KEYS[2], ARGV[1])
+"""
+
 
 class Store:
     _QUEUE_PREFIX = "kickdown:queue:"
@@ -64,10 +75,11 @@ class Store:
     _CONSUMERS_KEY = "kickdown:consumers"
 
     def __init__(self, redis_url: str):
-        self._redis = Redis.from_url(redis_url)
+        self._redis = connect(redis_url)
         self._enqueue_due = self._redis.register_script(_ENQUEUE_DUE_LUA)
         self._claim = self._redis.register_script(_CLAIM_LUA)
         self._reap = self._redis.register_script(_REAP_LUA)
+        self._forget_dead = self._redis.register_script(_FORGET_DEAD_LUA)
 
     @classmethod
     def queue_key(cls, name: str) -> str:
@@ -214,10 +226,14 @@ class Store:
             raise StoreError(str(e)) from e
 
     def heartbeat(self, consumer_id: str, ttl: int) -> None:
-        try:
-            self._redis.set(self._beat_key(consumer_id), "1", ex=ttl)
-        except RedisError as e:
-            raise StoreError(str(e)) from e
+        """Refreshes the beat key and re-asserts registry membership.
+
+        A consumer that outlives a Redis outage longer than the heartbeat TTL
+        (a Sentinel failover, say) is reaped by its peers and dropped from the
+        registry while it is still running. If it only refreshed the key, the
+        tasks it claims afterwards would never be reaped should it die.
+        """
+        self.register_consumer(consumer_id, ttl)
 
     def deregister_consumer(self, consumer_id: str) -> None:
         try:
@@ -227,6 +243,17 @@ class Store:
             pipe.execute()
         except RedisError as e:
             raise StoreError(str(e)) from e
+
+    def forget_if_dead(self, consumer_id: str) -> bool:
+        """Removes a reaped consumer from the registry unless it came back."""
+        try:
+            removed = self._forget_dead(
+                keys=[self._beat_key(consumer_id), self._CONSUMERS_KEY],
+                args=[consumer_id],
+            )
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+        return bool(removed)
 
     def consumers(self) -> list[str]:
         try:
@@ -284,4 +311,4 @@ class Store:
             raise StoreError(str(e)) from e
 
     def close(self) -> None:
-        self._redis.close()
+        close(self._redis)
