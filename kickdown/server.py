@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 
 from .consumer import Consumer
 from .log import default_logger
-from .models import Task, Worker
+from .models import Task, Worker, retry_policy
 from .queue import Queue
 from .reaper import Reaper
 from .scheduler import Scheduler
@@ -48,7 +48,9 @@ class Server:
         return Queue(name, self._store)
 
     def add_workers(self, *args: Worker):
+        """Raises `ValidationError` for a worker with a malformed retry policy."""
         for worker in args:
+            retry_policy(worker)
             self._worker[(worker.queue, worker.operation)] = worker
 
     async def enqueue(self, task: Task) -> str:
@@ -85,7 +87,7 @@ class Server:
             logger=self.logger,
         )
         scheduler = Scheduler(queues=self.queues, logger=self.logger)
-        reaper = Reaper(store=self._store, logger=self.logger)
+        reaper = Reaper(store=self._store, workers=self._worker, logger=self.logger)
         web = Web(
             port=self._web_port,
             server=self,

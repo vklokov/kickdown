@@ -5,12 +5,13 @@ import socket
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
+from typing import cast
 
 from pydantic import ValidationError
 from uuid_extensions import uuid7str
 
 from .log import default_logger
-from .models import Task, Worker
+from .models import Task, Worker, retry_policy
 from .queue import Queue
 from .store import Store, StoreError
 
@@ -63,7 +64,7 @@ class Consumer:
         heartbeat expired and another server reaped them.
         """
         try:
-            returned = await asyncio.to_thread(self._store.reap, self.id)
+            returned = await asyncio.to_thread(self._store.return_inflight, self.id)
             if returned:
                 self.logger.warning(
                     f"consumer {self.id} returned {returned} unfinished task(s)"
@@ -168,8 +169,8 @@ class Consumer:
     async def _run_task(self, task: Task, raw: bytes) -> None:
         queue = self._queue(task.queue)
         failure: Exception | None = None
+        worker = self._workers.get((task.queue, task.operation))
         try:
-            worker = self._workers.get((task.queue, task.operation))
             if worker is None:
                 self.logger.error(
                     f"no worker registered for task jid={task.jid}",
@@ -199,19 +200,18 @@ class Consumer:
             await self._ack(raw)
             return
 
-        if task.retry_count > 0:
+        # read when needed rather than snapshotted: the workers mapping is the
+        # server's own, and a startup hook may still register into it. Only
+        # `perform` can fail, so the worker is known by now.
+        policy = retry_policy(cast(Worker, worker))
+        if policy.allows_retry(task):
             delay = _retry_delay * _backoff_coefficient**task.attempt
             self.logger.warning(
                 f"jid={task.jid} failed, retrying in {delay:.1f}s "
-                f"({task.retry_count} attempt(s) left)",
+                f"({policy.retry_count - task.attempt} attempt(s) left)",
                 extra={"error": str(failure)},
             )
-            retry_task = task.model_copy(
-                update={
-                    "retry_count": task.retry_count - 1,
-                    "attempt": task.attempt + 1,
-                }
-            )
+            retry_task = task.model_copy(update={"attempt": task.attempt + 1})
             try:
                 await queue.schedule(retry_task, time.time() + delay)
             except StoreError as schedule_err:
@@ -224,8 +224,10 @@ class Consumer:
                 return
             await self._ack(raw)
         else:
+            reason = "retries exhausted" if policy.retry else "retries disabled"
             self.logger.error(
-                f"jid={task.jid} failed permanently", extra={"error": str(failure)}
+                f"jid={task.jid} failed permanently ({reason})",
+                extra={"error": str(failure)},
             )
             await self._increment(queue.increment_failed)
             await self._ack(raw)
