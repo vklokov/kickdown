@@ -193,6 +193,7 @@ class ChargeCardWorker:
     operation = "charge"
     retry = False  # default: True
 
+
 class SendEmailWorker:
     queue = "emails"
     operation = "send_email"
