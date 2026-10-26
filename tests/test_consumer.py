@@ -10,11 +10,14 @@ from kickdown.models import Task
 from kickdown.store import Store, StoreError
 
 
-def make_worker(queue: str, operation: str) -> MagicMock:
-    worker = MagicMock()
+def make_worker(queue: str, operation: str, **retry) -> MagicMock:
+    # spec'd so that `retry`/`retry_count` are absent unless given
+    worker = MagicMock(spec=["queue", "operation", "perform", *retry])
     worker.queue = queue
     worker.operation = operation
     worker.perform = AsyncMock()
+    for name, value in retry.items():
+        setattr(worker, name, value)
     return worker
 
 
@@ -149,31 +152,31 @@ async def test_run_task_increments_failed_for_unknown_operation(mock_store):
 
 
 async def test_run_task_retries_on_worker_failure(mock_store):
-    worker = make_worker("emails", "send")
+    worker = make_worker("emails", "send", retry_count=2)
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    task = make_task(operation="send", retry_count=2)
+    task = make_task(operation="send")
     await run_task(consumer, task)
 
     retried = scheduled_task(mock_store)
-    assert retried.retry_count == 1
+    assert retried.attempt == 1
     assert retried.jid == task.jid
     mock_store.push.assert_not_called()
 
 
 async def test_run_task_increments_attempt_on_retry(mock_store):
-    worker = make_worker("emails", "send")
+    worker = make_worker("emails", "send", retry_count=2)
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    await run_task(consumer, make_task(operation="send", retry_count=2, attempt=1))
+    await run_task(consumer, make_task(operation="send", attempt=1))
 
     assert scheduled_task(mock_store).attempt == 2
 
 
 async def test_retry_delay_grows_with_backoff_coefficient(mock_store, monkeypatch):
-    worker = make_worker("emails", "send")
+    worker = make_worker("emails", "send", retry_count=3)
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
@@ -183,45 +186,100 @@ async def test_retry_delay_grows_with_backoff_coefficient(mock_store, monkeypatc
     delays = []
     for attempt in range(3):
         now = time.time()
-        await run_task(
-            consumer, make_task(operation="send", retry_count=3, attempt=attempt)
-        )
+        await run_task(consumer, make_task(operation="send", attempt=attempt))
         delays.append(round(scheduled_at(mock_store) - now))
 
     assert delays == [1, 2, 4]
 
 
 async def test_run_task_does_not_update_stats_while_retries_remain(mock_store):
-    worker = make_worker("emails", "send")
+    worker = make_worker("emails", "send", retry_count=2)
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    await run_task(consumer, make_task(operation="send", retry_count=2))
+    await run_task(consumer, make_task(operation="send"))
 
     mock_store.increment_processed.assert_not_called()
     mock_store.increment_failed.assert_not_called()
 
 
 async def test_run_task_drops_task_when_retries_exhausted(mock_store):
-    worker = make_worker("emails", "send")
+    worker = make_worker("emails", "send", retry_count=0)
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    task = make_task(operation="send", retry_count=0)
+    task = make_task(operation="send")
     await run_task(consumer, task)
 
     mock_store.schedule.assert_not_called()
 
 
 async def test_run_task_increments_failed_when_retries_exhausted(mock_store):
+    worker = make_worker("emails", "send", retry_count=0)
+    worker.perform.side_effect = RuntimeError("boom")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+
+    await run_task(consumer, make_task(operation="send"))
+
+    mock_store.increment_failed.assert_called_once_with("emails")
+    mock_store.increment_processed.assert_not_called()
+
+
+async def test_run_task_retries_once_by_default(mock_store):
     worker = make_worker("emails", "send")
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    await run_task(consumer, make_task(operation="send", retry_count=0))
+    await run_task(consumer, make_task(operation="send"))
+    assert scheduled_task(mock_store).attempt == 1
 
+    mock_store.schedule.reset_mock()
+    await run_task(consumer, make_task(operation="send", attempt=1))
+    mock_store.schedule.assert_not_called()
     mock_store.increment_failed.assert_called_once_with("emails")
-    mock_store.increment_processed.assert_not_called()
+
+
+async def test_run_task_does_not_retry_when_the_worker_disables_retries(mock_store):
+    worker = make_worker("emails", "send", retry=False, retry_count=5)
+    worker.perform.side_effect = RuntimeError("boom")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+    consumer.logger = MagicMock()
+
+    task = make_task(operation="send")
+    await run_task(consumer, task)
+
+    mock_store.schedule.assert_not_called()
+    mock_store.increment_failed.assert_called_once_with("emails")
+    mock_store.ack.assert_called_once_with(consumer.id, raw_of(task))
+    consumer.logger.error.assert_called_once_with(
+        f"jid={task.jid} failed permanently (retries disabled)",
+        extra={"error": "boom"},
+    )
+
+
+async def test_run_task_reports_retries_left(mock_store):
+    worker = make_worker("emails", "send", retry_count=3)
+    worker.perform.side_effect = RuntimeError("boom")
+    consumer = Consumer(store=mock_store, workers=workers_dict(worker))
+    consumer.logger = MagicMock()
+
+    await run_task(consumer, make_task(operation="send", attempt=1))
+
+    assert "(2 attempt(s) left)" in consumer.logger.warning.call_args.args[0]
+
+
+async def test_run_task_applies_the_policy_of_a_worker_registered_late(mock_store):
+    # a startup hook runs after the consumer is built and may still register
+    workers = workers_dict(make_worker("emails", "send"))
+    consumer = Consumer(store=mock_store, workers=workers)
+    late = make_worker("emails", "notify", retry=False)
+    late.perform.side_effect = RuntimeError("boom")
+    workers[("emails", "notify")] = late
+
+    await run_task(consumer, make_task(operation="notify"))
+
+    mock_store.schedule.assert_not_called()
+    mock_store.increment_failed.assert_called_once_with("emails")
 
 
 async def test_run_task_logs_but_does_not_raise_when_stats_update_fails(mock_store):
@@ -243,7 +301,7 @@ async def test_run_task_swallows_store_error_on_retry_schedule(mock_store):
     mock_store.schedule.side_effect = StoreError("connection lost")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    task = make_task(operation="send", retry_count=1)
+    task = make_task(operation="send")
     await run_task(consumer, task)  # must not raise
 
 
@@ -258,12 +316,12 @@ async def test_run_task_releases_semaphore_on_success(mock_store):
 
 
 async def test_run_task_releases_semaphore_on_failure(mock_store):
-    worker = make_worker("emails", "send")
+    worker = make_worker("emails", "send", retry_count=0)
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker), concurrency=1)
 
     await consumer._semaphore.acquire()
-    await run_task(consumer, make_task(operation="send", retry_count=0))
+    await run_task(consumer, make_task(operation="send"))
     assert not consumer._semaphore.locked()
 
 
@@ -273,7 +331,7 @@ async def test_run_task_releases_semaphore_on_retry(mock_store):
     consumer = Consumer(store=mock_store, workers=workers_dict(worker), concurrency=1)
 
     await consumer._semaphore.acquire()
-    await run_task(consumer, make_task(operation="send", retry_count=1))
+    await run_task(consumer, make_task(operation="send"))
 
     assert not consumer._semaphore.locked()
 
@@ -296,18 +354,18 @@ async def test_run_task_acks_after_scheduling_a_retry(mock_store):
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    task = make_task(operation="send", retry_count=1)
+    task = make_task(operation="send")
     await run_task(consumer, task)
 
     mock_store.ack.assert_called_once_with(consumer.id, raw_of(task))
 
 
 async def test_run_task_acks_after_permanent_failure(mock_store):
-    worker = make_worker("emails", "send")
+    worker = make_worker("emails", "send", retry_count=0)
     worker.perform.side_effect = RuntimeError("boom")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    task = make_task(operation="send", retry_count=0)
+    task = make_task(operation="send")
     await run_task(consumer, task)
 
     mock_store.ack.assert_called_once_with(consumer.id, raw_of(task))
@@ -330,7 +388,7 @@ async def test_run_task_keeps_task_in_flight_when_the_retry_cannot_be_scheduled(
     mock_store.schedule.side_effect = StoreError("connection lost")
     consumer = Consumer(store=mock_store, workers=workers_dict(worker))
 
-    await run_task(consumer, make_task(operation="send", retry_count=1))
+    await run_task(consumer, make_task(operation="send"))
 
     # the reaper has to be able to find it, so it must not be acked away
     mock_store.ack.assert_not_called()
@@ -369,17 +427,17 @@ async def test_start_registers_the_consumer(mock_store):
 
 
 async def test_stop_returns_unfinished_tasks_and_deregisters(mock_store):
-    mock_store.reap.return_value = 1
+    mock_store.return_inflight.return_value = 1
     consumer = Consumer(store=mock_store, workers={}, consumer_id="fixed")
 
     await consumer.stop()
 
-    mock_store.reap.assert_called_once_with("fixed")
+    mock_store.return_inflight.assert_called_once_with("fixed")
     mock_store.deregister_consumer.assert_called_once_with("fixed")
 
 
 async def test_stop_survives_a_redis_outage(mock_store):
-    mock_store.reap.side_effect = StoreError("connection lost")
+    mock_store.return_inflight.side_effect = StoreError("connection lost")
     consumer = Consumer(store=mock_store, workers={}, consumer_id="fixed")
 
     await consumer.stop()  # must not raise

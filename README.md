@@ -184,11 +184,35 @@ jid = await server.enqueue(task)
 
 #### Retries
 
-`retry_count` (default `1`) on `Task` sets how many times a failed task is
-retried before being dropped. On failure, the consumer re-enqueues the task
-with `retry_count` decremented by one and `attempt` incremented by one, after
-an exponentially growing delay. Once `retry_count` reaches `0` the task is
-dropped.
+How a failed task is retried is decided by its worker, not by the task. A
+worker can override two optional attributes:
+
+```python
+class ChargeCardWorker:
+    queue = "payments"
+    operation = "charge"
+    retry = False  # default: True
+
+
+class SendEmailWorker:
+    queue = "emails"
+    operation = "send_email"
+    retry_count = 5  # default: 1
+```
+
+- `retry_count` is how many times a failed task runs again, so it runs at
+  most `1 + retry_count` times.
+- `retry = False` turns retries off altogether, on exceptions and on crashes
+  alike (see below); `retry_count` is then ignored.
+
+`add_workers` rejects a worker whose `retry` is not a `bool` or whose
+`retry_count` is not an `int` of at least `0`.
+
+The task itself only carries `attempt`, the number of runs that already
+failed. On failure, the consumer re-enqueues the task with `attempt`
+incremented by one, after an exponentially growing delay, as long as
+`attempt` is below the worker's `retry_count`. After that the task is
+dropped and counted as failed.
 
 The delay is `1s * 1.5 ** attempt` — both the base delay and the backoff
 coefficient are fixed in the library and cannot be configured per task:
@@ -224,16 +248,24 @@ unreachable (and is in fact still running) is watched again as soon as it
 is back in touch; the reaper only forgets a consumer whose heartbeat is
 still missing at that moment.
 
-That makes delivery **at-least-once**: a task interrupted by a crash runs
-again, and a task that crashed the process *after* its side effects completed
-runs those side effects twice. Workers must be idempotent.
+A crash counts as a failed attempt, under the retry policy of the task's
+worker. The reaper pushes a task back into its queue straight away (no
+backoff delay) with `attempt` incremented by one, and only while the worker
+allows another retry. Otherwise, or if the worker sets `retry = False`, the
+task is dropped and counted as failed. So a task that reliably kills its
+process (an OOM, say) runs at most `1 + retry_count` times.
 
-Two consequences worth knowing:
+The reaper looks the policy up among the workers registered on *its own*
+server, which need not be the server that died. A task for a worker the
+reaping server does not have gets the default policy (`retry = True`,
+`retry_count = 1`). Keep the workers' retry settings identical across the
+servers sharing a Redis.
 
-- A task that reliably kills its process (an OOM, say) will be requeued and
-  kill it again. There is no poison-pill limit yet.
-- A reaped task keeps its `retry_count`: being interrupted is not counted as a
-  failed attempt.
+That makes delivery **at-least-once** for workers that retry: a task
+interrupted by a crash runs again, and a task that crashed the process
+*after* its side effects completed runs those side effects twice. Such
+workers must be idempotent. With `retry = False` it is at-most-once instead:
+an interrupted task never runs again.
 
 Queue names are raw identifiers (e.g. `"default"`, `"emails"`). The client
 constructs the full Redis key internally as `kickdown:queue:{name}`.

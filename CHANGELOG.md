@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0 - 2026-10-26
+
+### Changed
+- The retry policy moved from the task to the worker. `Task.retry_count` is gone; a worker may set `retry` (default `True`) and `retry_count` (default `1`, how many times a failed task runs again). `retry = False` disables retries on exceptions and on crashes alike, and `retry_count` is then ignored. `Task.attempt` stays and counts the runs that already failed
+- `add_workers` rejects a worker whose `retry` is not a `bool` or whose `retry_count` is not an `int` of at least `0`
+- A crash now counts as a failed attempt. The reaper settles a dead consumer's in-flight tasks one by one under the retry policy of the task's worker, as registered on the reaping server. A task with retries left is pushed back into its queue with `attempt` incremented, and any other task is dropped and counted as failed. A task whose worker the reaping server does not know gets the default policy. An in-flight payload that cannot be parsed is dropped without being counted
+- `Store.reap` renamed to `Store.return_inflight`. It is still used on a clean shutdown, which returns unfinished tasks to their queues untouched
+
+### Fixed
+- A task that reliably kills its process (an OOM, say) is no longer requeued forever: it runs at most `1 + retry_count` times
+
 ## 0.4.1 - 2026-10-22
 
 ### Added

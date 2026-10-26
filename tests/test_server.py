@@ -7,11 +7,14 @@ from kickdown.server import Server
 from kickdown.store import Store, StoreError
 
 
-def make_worker(queue: str, operation: str) -> MagicMock:
-    worker = MagicMock()
+def make_worker(queue: str, operation: str, **retry) -> MagicMock:
+    # spec'd so that `retry`/`retry_count` are absent unless given
+    worker = MagicMock(spec=["queue", "operation", "perform", *retry])
     worker.queue = queue
     worker.operation = operation
     worker.perform = AsyncMock()
+    for name, value in retry.items():
+        setattr(worker, name, value)
     return worker
 
 
@@ -40,6 +43,15 @@ def test_add_workers_allows_same_operation_on_different_queues(server):
     b = make_worker("q2", "process")
     server.add_workers(a, b)
     assert server._worker == {("q1", "process"): a, ("q2", "process"): b}
+
+
+@pytest.mark.parametrize(
+    "retry", [{"retry_count": -1}, {"retry_count": "3"}, {"retry": "yes"}]
+)
+def test_add_workers_rejects_a_malformed_retry_policy(server, retry):
+    with pytest.raises(ValueError):
+        server.add_workers(make_worker("q1", "a", **retry))
+    assert server._worker == {}
 
 
 def test_queues_returns_sorted_deduped_worker_queues(server):
@@ -177,7 +189,9 @@ async def test_run_starts_the_reaper(server, mock_store):
         MockReaper.return_value.run = AsyncMock(return_value=None)
         await server.run()
 
-    MockReaper.assert_called_once_with(store=mock_store, logger=server.logger)
+    MockReaper.assert_called_once_with(
+        store=mock_store, workers=server._worker, logger=server.logger
+    )
     MockReaper.return_value.run.assert_awaited_once()
 
 

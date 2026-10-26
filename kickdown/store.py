@@ -37,9 +37,9 @@ end
 return false
 """
 
-# Returns everything left in a dead consumer's in-flight list (KEYS[1]) to the
-# queue each task names, oldest first.
-_REAP_LUA = """
+# Returns everything left in a stopping consumer's in-flight list (KEYS[1]) to
+# the queue each task names, oldest first, untouched.
+_RETURN_INFLIGHT_LUA = """
 local reaped = 0
 while true do
     local payload = redis.call('LPOP', KEYS[1])
@@ -51,6 +51,23 @@ while true do
     reaped = reaped + 1
 end
 return reaped
+"""
+
+# Takes the oldest task off a dead consumer's in-flight list (KEYS[1]) once the
+# reaper has decided its fate, provided it is still the payload the decision was
+# made on (ARGV[1]). A replacement payload (ARGV[2]) is pushed onto the queue
+# (KEYS[2]); without one KEYS[2], if given, is the failed counter to bump.
+_SETTLE_HEAD_LUA = """
+if redis.call('LINDEX', KEYS[1], 0) ~= ARGV[1] then
+    return 0
+end
+redis.call('LPOP', KEYS[1])
+if ARGV[2] then
+    redis.call('RPUSH', KEYS[2], ARGV[2])
+elseif KEYS[2] then
+    redis.call('INCR', KEYS[2])
+end
+return 1
 """
 
 # Drops a consumer (ARGV[1]) from the registry (KEYS[2]) only if its beat key
@@ -78,7 +95,8 @@ class Store:
         self._redis = connect(redis_url)
         self._enqueue_due = self._redis.register_script(_ENQUEUE_DUE_LUA)
         self._claim = self._redis.register_script(_CLAIM_LUA)
-        self._reap = self._redis.register_script(_REAP_LUA)
+        self._return_inflight = self._redis.register_script(_RETURN_INFLIGHT_LUA)
+        self._settle_head = self._redis.register_script(_SETTLE_HEAD_LUA)
         self._forget_dead = self._redis.register_script(_FORGET_DEAD_LUA)
 
     @classmethod
@@ -278,14 +296,51 @@ class Store:
             raise StoreError(str(e)) from e
         return bool(acquired)
 
-    def reap(self, consumer_id: str) -> int:
+    def return_inflight(self, consumer_id: str) -> int:
         try:
-            reaped = self._reap(
+            returned = self._return_inflight(
                 keys=[self.inflight_key(consumer_id)], args=[self._QUEUE_PREFIX]
             )
         except RedisError as e:
             raise StoreError(str(e)) from e
-        return cast(int, reaped)
+        return cast(int, returned)
+
+    def inflight_head(self, consumer_id: str) -> bytes | None:
+        """The oldest task left in a consumer's in-flight list, as stored."""
+        try:
+            return cast(
+                bytes | None, self._redis.lindex(self.inflight_key(consumer_id), 0)
+            )
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+
+    def requeue_head(self, consumer_id: str, raw: bytes, task: Task) -> bool:
+        """Replaces the in-flight head `raw` with `task`, pushed onto its queue.
+
+        Returns False, changing nothing, if `raw` is no longer the head.
+        """
+        return self._settle(
+            keys=[self.inflight_key(consumer_id), self.queue_key(task.queue)],
+            args=[raw, task.model_dump_json()],
+        )
+
+    def drop_head(self, consumer_id: str, raw: bytes, queue: str | None) -> bool:
+        """Discards the in-flight head `raw`, counting it as failed on `queue`.
+
+        Without a queue (a payload that could not be parsed) nothing is
+        counted. Returns False, changing nothing, if `raw` is no longer the head.
+        """
+        keys = [self.inflight_key(consumer_id)]
+        if queue is not None:
+            keys.append(self._failed_key(queue))
+        return self._settle(keys=keys, args=[raw])
+
+    def _settle(self, keys: list[str], args: list) -> bool:
+        try:
+            settled = self._settle_head(keys=keys, args=args)
+        except RedisError as e:
+            raise StoreError(str(e)) from e
+        return bool(settled)
 
     def increment_processed(self, queue: str) -> None:
         try:
